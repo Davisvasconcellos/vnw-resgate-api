@@ -1044,9 +1044,24 @@ router.post('/:id/approve',
               if (!candidate.user_id || !candidate.instrument) continue;
               
               const userIdClean = String(candidate.user_id).trim();
-              // Frontend sends id_code (UUID) as user_id. Find the internal numeric ID first.
+              
+              // Validate UUID format to prevent enumeration attacks
+              const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+              if (!uuidRegex.test(userIdClean)) {
+                  console.warn(`[Approve] Invalid UUID format for User ID: ${userIdClean}`);
+                  // We throw an error to rollback transaction and inform the frontend
+                  throw new Error(`ID do usuário inválido: ${userIdClean}. Esperado UUID.`);
+              }
+
+              // Only find by id_code (UUID)
               const user = await User.findOne({ where: { id_code: userIdClean }, transaction });
-              if (!user) continue;
+
+              if (!user) {
+                  console.warn(`[Approve] User not found for ID: ${userIdClean}`);
+                  // Decide if we should fail hard or just skip. 
+                  // If frontend sends an ID that doesn't exist, it's an error state.
+                  throw new Error(`Usuário não encontrado: ${userIdClean}`);
+              }
 
               const eventId = targetJam.event_id;
               const guest = await EventGuest.findOne({ where: { event_id: eventId, user_id: user.id }, transaction });
@@ -1060,6 +1075,10 @@ router.post('/:id/approve',
                    approved_at: new Date(),
                    approved_by_user_id: adminId
                  }, { transaction });
+              } else {
+                 console.warn(`[Approve] Guest not found for User: ${userIdClean} in Event: ${eventId}`);
+                 // Should we fail if guest is not checked in? Probably yes for data integrity.
+                 throw new Error(`Usuário ${user.name} não está vinculado como convidado neste evento.`);
               }
             }
           }
