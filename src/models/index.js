@@ -14,6 +14,7 @@ const PixPayment = require('./PixPayment');
 const Message = require('./Message');
 const StoreSchedule = require('./StoreSchedule');
 const FinancialTransaction = require('./FinancialTransaction');
+const FinancialCommission = require('./FinancialCommission');
 const BankAccount = require('./BankAccount');
 const Event = require('./Event');
 const EventQuestion = require('./EventQuestion');
@@ -221,6 +222,23 @@ Store.hasMany(Party, { foreignKey: 'store_id', sourceKey: 'id_code', as: 'partie
 FinancialTransaction.belongsTo(Party, { foreignKey: 'party_id', targetKey: 'id_code', as: 'party' });
 Party.hasMany(FinancialTransaction, { foreignKey: 'party_id', sourceKey: 'id_code', as: 'transactions' });
 
+FinancialCommission.belongsTo(Store, { foreignKey: 'store_id', targetKey: 'id_code', as: 'store' });
+Store.hasMany(FinancialCommission, { foreignKey: 'store_id', sourceKey: 'id_code', as: 'financialCommissions' });
+
+FinancialCommission.belongsTo(FinancialTransaction, {
+  foreignKey: 'source_transaction_id_code',
+  targetKey: 'id_code',
+  as: 'sourceTransaction'
+});
+FinancialTransaction.hasMany(FinancialCommission, {
+  foreignKey: 'source_transaction_id_code',
+  sourceKey: 'id_code',
+  as: 'commissions'
+});
+
+FinancialCommission.belongsTo(Party, { foreignKey: 'commission_seller_id', targetKey: 'id_code', as: 'commissionSeller' });
+Party.hasMany(FinancialCommission, { foreignKey: 'commission_seller_id', sourceKey: 'id_code', as: 'commissions' });
+
 // FinCategory associations
 FinCategory.belongsTo(Store, { foreignKey: 'store_id', targetKey: 'id_code', as: 'store' });
 Store.hasMany(FinCategory, { foreignKey: 'store_id', sourceKey: 'id_code', as: 'finCategories' });
@@ -306,6 +324,7 @@ module.exports = {
   TokenBlocklist,
   StoreSchedule,
   FinancialTransaction,
+  FinancialCommission,
   BankAccount,
   Event
   ,EventQuestion

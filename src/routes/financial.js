@@ -3,7 +3,7 @@ const { body, query, validationResult } = require('express-validator');
 const { authenticateToken, requireModule } = require('../middlewares/auth');
 const { requireStoreContext, requireStoreAccess } = require('../middlewares/storeContext');
 const { requireStorePermission } = require('../middlewares/storePermissions');
-const { FinancialTransaction, User, FinTag, FinCategory, FinCostCenter, Party, sequelize } = require('../models');
+const { FinancialTransaction, FinancialCommission, User, FinTag, FinCategory, FinCostCenter, Party, sequelize } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const { URL } = require('url');
 
@@ -608,7 +608,22 @@ router.post(
       .isString(),
     body('tags')
       .optional()
-      .isArray()
+      .isArray(),
+    body('salesperson_id_code')
+      .optional({ nullable: true })
+      .isString(),
+    body('commission_seller_id')
+      .optional({ nullable: true })
+      .isString(),
+    body('commission_type')
+      .optional({ nullable: true })
+      .isIn(['percentage', 'fixed']),
+    body('commission_rate')
+      .optional({ nullable: true })
+      .isFloat({ min: 0 }),
+    body('commission_amount')
+      .optional({ nullable: true })
+      .isFloat({ gt: 0 })
   ],
   async (req, res) => {
     try {
@@ -641,8 +656,53 @@ router.post(
         bank_account_id,
         attachment_url,
         approved_by,
-        tags
+        tags,
+        salesperson_id_code,
+        commission_seller_id,
+        commission_type,
+        commission_rate,
+        commission_amount
       } = req.body;
+
+      const hasCommission =
+        salesperson_id_code ||
+        commission_seller_id ||
+        commission_rate !== undefined ||
+        commission_amount !== undefined;
+
+      if (hasCommission) {
+        const sellerId = commission_seller_id || salesperson_id_code;
+        if (!sellerId) {
+          logicErrors.push({
+            param: 'commission_seller_id',
+            msg: 'commission_seller_id é obrigatório quando houver comissão.'
+          });
+        }
+        if (commission_amount === undefined || commission_amount === null) {
+          logicErrors.push({
+            param: 'commission_amount',
+            msg: 'commission_amount é obrigatório quando houver comissão.'
+          });
+        }
+        if (commission_type === 'percentage' && (commission_rate === undefined || commission_rate === null)) {
+          logicErrors.push({
+            param: 'commission_rate',
+            msg: 'commission_rate é obrigatório quando commission_type é "percentage".'
+          });
+        }
+        if (commission_rate !== undefined && commission_rate !== null && Number(commission_rate) > 100) {
+          logicErrors.push({
+            param: 'commission_rate',
+            msg: 'commission_rate não pode ser maior que 100.'
+          });
+        }
+        if (commission_amount !== undefined && commission_amount !== null && Number(commission_amount) > Number(amount)) {
+          logicErrors.push({
+            param: 'commission_amount',
+            msg: 'commission_amount não pode ser maior que amount.'
+          });
+        }
+      }
 
       if (is_paid && status !== 'paid') {
         logicErrors.push({
@@ -717,6 +777,23 @@ router.post(
         });
       }
 
+      let salesperson = null;
+      if (hasCommission) {
+        const sellerId = commission_seller_id || salesperson_id_code;
+        salesperson = await Party.findOne({
+          where: { id_code: sellerId, store_id: req.storeId }
+        });
+
+        if (!salesperson) {
+          return res.status(400).json({
+            error: 'Validation error',
+            message: 'Vendedor não encontrado para esta store.',
+            details: [{ param: 'commission_seller_id', msg: 'Vendedor inválido' }]
+          });
+        }
+
+      }
+
       const attachments = parseAttachmentsFromRequestBody(req.body, null);
 
       const payload = {
@@ -746,9 +823,35 @@ router.post(
 
       const t = await sequelize.transaction();
       let transaction;
+      let createdCommission = null;
 
       try {
         transaction = await FinancialTransaction.create(payload, { transaction: t });
+
+        if (hasCommission) {
+          const existingCommission = await FinancialCommission.findOne({
+            where: { store_id: req.storeId, source_transaction_id_code: transaction.id_code },
+            transaction: t
+          });
+
+          if (!existingCommission) {
+            createdCommission = await FinancialCommission.create(
+              {
+                store_id: req.storeId,
+                source_transaction_id_code: transaction.id_code,
+                commission_seller_id: salesperson.id_code,
+                commission_type: commission_type || null,
+                commission_rate: commission_rate !== undefined ? commission_rate : null,
+                commission_amount,
+                status: 'pending',
+                created_by_user_id: user.id
+              },
+              { transaction: t }
+            );
+          } else {
+            createdCommission = existingCommission;
+          }
+        }
 
         if (tags && Array.isArray(tags) && tags.length > 0) {
           const tagInstances = await FinTag.findAll({
@@ -842,6 +945,15 @@ router.post(
             name: transaction.party.name,
             document: transaction.party.document,
             email: transaction.party.email
+          } : null,
+          commission: createdCommission ? {
+            id_code: createdCommission.id_code,
+            source_transaction_id_code: createdCommission.source_transaction_id_code,
+            commission_seller_id: createdCommission.commission_seller_id,
+            commission_type: createdCommission.commission_type || null,
+            commission_rate: createdCommission.commission_rate !== null ? parseFloat(createdCommission.commission_rate) : null,
+            commission_amount: parseFloat(createdCommission.commission_amount),
+            status: createdCommission.status
           } : null
         }
       });

@@ -76,6 +76,17 @@ jest.mock('../models', () => {
         }]
       })
     },
+    FinancialCommission: {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockImplementation((payload) => Promise.resolve({
+        ...payload,
+        id_code: 'com-uuid-1',
+        toJSON: function() { return this; }
+      }))
+    },
+    Party: {
+      findOne: jest.fn()
+    },
     Op: Sequelize.Op
   };
 });
@@ -103,6 +114,35 @@ describe('Financial Transactions API', () => {
       expect(res.statusCode).toEqual(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.store_id).toEqual('store-uuid-999');
+    });
+
+    it('should create a commission when salesperson fields are provided', async () => {
+      const { Party, FinancialCommission } = require('../models');
+      Party.findOne.mockResolvedValue({ id_code: 'pty-vendor-1', is_salesperson: true });
+      FinancialCommission.findOne.mockResolvedValue(null);
+
+      const payload = {
+        type: 'RECEIVABLE',
+        description: 'Venda',
+        amount: 10000,
+        due_date: '2026-02-10',
+        is_paid: false,
+        status: 'pending',
+        store_id: 'store-uuid-999',
+        commission_seller_id: 'pty-vendor-1',
+        commission_type: 'percentage',
+        commission_rate: 10,
+        commission_amount: 1000
+      };
+
+      const res = await request(app)
+        .post('/api/v1/financial/transactions')
+        .send(payload);
+
+      expect(res.statusCode).toEqual(201);
+      expect(FinancialCommission.create).toHaveBeenCalled();
+      expect(res.body.data.commission.commission_seller_id).toBe('pty-vendor-1');
+      expect(res.body.data.commission.commission_amount).toBe(1000);
     });
   });
 
