@@ -116,6 +116,31 @@ describe('Financial Transactions API', () => {
       expect(res.body.data.store_id).toEqual('store-uuid-999');
     });
 
+    it('should allow creating a transaction when commission fields are present but null', async () => {
+      const payload = {
+        type: 'RECEIVABLE',
+        description: 'Sem comissão',
+        amount: 3000,
+        due_date: '2026-02-10',
+        is_paid: false,
+        status: 'pending',
+        store_id: 'store-uuid-999',
+        commission_seller_id: null,
+        commission_type: null,
+        commission_rate: null,
+        commission_amount: null,
+        has_commission: false
+      };
+
+      const res = await request(app)
+        .post('/api/v1/financial/transactions')
+        .send(payload);
+
+      expect(res.statusCode).toEqual(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.commission).toBeNull();
+    });
+
     it('should create a commission when salesperson fields are provided', async () => {
       const { Party, FinancialCommission } = require('../models');
       Party.findOne.mockResolvedValue({ id_code: 'pty-vendor-1', is_salesperson: true });
@@ -132,7 +157,8 @@ describe('Financial Transactions API', () => {
         commission_seller_id: 'pty-vendor-1',
         commission_type: 'percentage',
         commission_rate: 10,
-        commission_amount: 1000
+        commission_amount: 1000,
+        allow_advance_payment: true
       };
 
       const res = await request(app)

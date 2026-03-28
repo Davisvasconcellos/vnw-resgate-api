@@ -236,6 +236,17 @@ FinancialTransaction.hasMany(FinancialCommission, {
   as: 'commissions'
 });
 
+FinancialCommission.belongsTo(FinancialTransaction, {
+  foreignKey: 'paid_transaction_id_code',
+  targetKey: 'id_code',
+  as: 'paidTransaction'
+});
+FinancialTransaction.hasMany(FinancialCommission, {
+  foreignKey: 'paid_transaction_id_code',
+  sourceKey: 'id_code',
+  as: 'paidCommissions'
+});
+
 FinancialCommission.belongsTo(Party, { foreignKey: 'commission_seller_id', targetKey: 'id_code', as: 'commissionSeller' });
 Party.hasMany(FinancialCommission, { foreignKey: 'commission_seller_id', sourceKey: 'id_code', as: 'commissions' });
 

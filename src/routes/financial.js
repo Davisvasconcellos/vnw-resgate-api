@@ -351,6 +351,49 @@ router.get(
           model: Party,
           as: 'party',
           attributes: ['id', 'id_code', 'name', 'document', 'email']
+        },
+        {
+          model: FinancialCommission,
+          as: 'commissions',
+          required: false,
+          attributes: [
+            'id_code',
+            'source_transaction_id_code',
+            'commission_seller_id',
+            'commission_type',
+            'commission_rate',
+            'commission_amount',
+            'status',
+            'paid_transaction_id_code',
+            'paid_bank_account_id',
+            'paid_at',
+            'created_at'
+          ]
+        },
+        {
+          model: FinancialCommission,
+          as: 'paidCommissions',
+          required: false,
+          attributes: [
+            'id_code',
+            'source_transaction_id_code',
+            'commission_seller_id',
+            'commission_type',
+            'commission_rate',
+            'commission_amount',
+            'status',
+            'paid_transaction_id_code',
+            'paid_bank_account_id',
+            'paid_at'
+          ],
+          include: [
+            {
+              model: FinancialTransaction,
+              as: 'sourceTransaction',
+              required: false,
+              attributes: ['id_code', 'amount']
+            }
+          ]
         }
       ];
 
@@ -415,6 +458,7 @@ router.get(
 
       const serializedTransactions = transactions.map((row) => {
         const plain = typeof row.toJSON === 'function' ? row.toJSON() : row;
+        const { commissions, paidCommissions, ...restPlain } = plain;
         const attachments = parseStoredAttachments(plain.attachment_url);
         const attachmentUrlString = buildAttachmentUrlString(attachments);
         const tags = plain.tags ? plain.tags.map(t => ({
@@ -422,11 +466,32 @@ router.get(
           name: t.name,
           color: t.color
         })) : [];
+        const commissionRow = Array.isArray(commissions) && commissions.length ? commissions[0] : null;
+        const commission = commissionRow ? {
+          id_code: commissionRow.id_code,
+          source_transaction_id_code: commissionRow.source_transaction_id_code,
+          commission_seller_id: commissionRow.commission_seller_id,
+          commission_type: commissionRow.commission_type || null,
+          commission_rate: commissionRow.commission_rate !== null && commissionRow.commission_rate !== undefined ? parseFloat(commissionRow.commission_rate) : null,
+          commission_amount: commissionRow.commission_amount !== null && commissionRow.commission_amount !== undefined ? parseFloat(commissionRow.commission_amount) : null,
+          status: commissionRow.status,
+          paid_transaction_id_code: commissionRow.paid_transaction_id_code || null,
+          paid_bank_account_id: commissionRow.paid_bank_account_id || null,
+          paid_at: commissionRow.paid_at || null
+        } : null;
+        const paidCommissionRow = Array.isArray(paidCommissions) && paidCommissions.length ? paidCommissions[0] : null;
+        const commissionOriginMetadata = paidCommissionRow ? {
+          commission_id_code: paidCommissionRow.id_code,
+          source_transaction_id_code: paidCommissionRow.source_transaction_id_code,
+          original_amount: paidCommissionRow.sourceTransaction ? paidCommissionRow.sourceTransaction.amount : null
+        } : null;
         return {
-          ...plain,
+          ...restPlain,
           attachment_url: attachmentUrlString,
           attachments,
           tags,
+          has_commission: !!commission,
+          commission_origin_metadata: commissionOriginMetadata,
           category_data: plain.finCategory ? {
             id: plain.finCategory.id_code,
             name: plain.finCategory.name,
@@ -443,7 +508,8 @@ router.get(
             name: plain.party.name,
             document: plain.party.document,
             email: plain.party.email
-          } : null
+          } : null,
+          commission
         };
       });
 
@@ -549,6 +615,151 @@ router.get(
   }
 );
 
+router.get(
+  '/transactions/:id_code',
+  authenticateToken,
+  requireModule('financial'),
+  requireStoreContext({ allowMissingForRoles: [] }),
+  requireStoreAccess,
+  requireStorePermission(['financial:read', 'financial:write']),
+  async (req, res) => {
+    try {
+      const transaction = await FinancialTransaction.findOne({
+        where: { id_code: req.params.id_code, store_id: req.storeId, is_deleted: false },
+        include: [
+          {
+            model: FinTag,
+            as: 'tags',
+            attributes: ['id', 'id_code', 'name', 'color'],
+            through: { attributes: [] }
+          },
+          {
+            model: FinCategory,
+            as: 'finCategory',
+            attributes: ['id', 'id_code', 'name', 'color', 'icon']
+          },
+          {
+            model: FinCostCenter,
+            as: 'finCostCenter',
+            attributes: ['id', 'id_code', 'name', 'code']
+          },
+          {
+            model: Party,
+            as: 'party',
+            attributes: ['id', 'id_code', 'name', 'document', 'email']
+          },
+          {
+            model: FinancialCommission,
+            as: 'commissions',
+            required: false,
+            attributes: [
+              'id_code',
+              'source_transaction_id_code',
+              'commission_seller_id',
+              'commission_type',
+              'commission_rate',
+              'commission_amount',
+              'status',
+              'paid_transaction_id_code',
+              'paid_bank_account_id',
+              'paid_at',
+              'created_at'
+            ]
+            },
+            {
+              model: FinancialCommission,
+              as: 'paidCommissions',
+              required: false,
+              attributes: [
+                'id_code',
+                'source_transaction_id_code',
+                'commission_seller_id',
+                'commission_type',
+                'commission_rate',
+                'commission_amount',
+                'status',
+                'paid_transaction_id_code',
+                'paid_bank_account_id',
+                'paid_at'
+              ],
+              include: [
+                {
+                  model: FinancialTransaction,
+                  as: 'sourceTransaction',
+                  required: false,
+                  attributes: ['id_code', 'amount']
+                }
+              ]
+          }
+        ]
+      });
+
+      if (!transaction) {
+        return res.status(404).json({ error: 'Not found', message: 'Transação não encontrada' });
+      }
+
+      const plain = typeof transaction.toJSON === 'function' ? transaction.toJSON() : transaction;
+      const { commissions, paidCommissions, ...restPlain } = plain;
+      const attachments = parseStoredAttachments(plain.attachment_url);
+      const attachmentUrlString = buildAttachmentUrlString(attachments);
+      const tags = plain.tags ? plain.tags.map(t => ({ id: t.id_code, name: t.name, color: t.color })) : [];
+      const commissionRow = Array.isArray(commissions) && commissions.length ? commissions[0] : null;
+      const paidCommissionRow = Array.isArray(paidCommissions) && paidCommissions.length ? paidCommissions[0] : null;
+
+      const commission = commissionRow ? {
+        id_code: commissionRow.id_code,
+        source_transaction_id_code: commissionRow.source_transaction_id_code,
+        commission_seller_id: commissionRow.commission_seller_id,
+        commission_type: commissionRow.commission_type || null,
+        commission_rate: commissionRow.commission_rate !== null && commissionRow.commission_rate !== undefined ? parseFloat(commissionRow.commission_rate) : null,
+        commission_amount: commissionRow.commission_amount !== null && commissionRow.commission_amount !== undefined ? parseFloat(commissionRow.commission_amount) : null,
+        status: commissionRow.status,
+        paid_transaction_id_code: commissionRow.paid_transaction_id_code || null,
+        paid_bank_account_id: commissionRow.paid_bank_account_id || null,
+        paid_at: commissionRow.paid_at || null
+      } : null;
+      const commissionOriginMetadata = paidCommissionRow ? {
+        commission_id_code: paidCommissionRow.id_code,
+        source_transaction_id_code: paidCommissionRow.source_transaction_id_code,
+        original_amount: paidCommissionRow.sourceTransaction ? paidCommissionRow.sourceTransaction.amount : null
+      } : null;
+
+      return res.json({
+        success: true,
+        data: {
+          ...restPlain,
+          attachment_url: attachmentUrlString,
+          attachments,
+          tags,
+          category_data: plain.finCategory ? {
+            id: plain.finCategory.id_code,
+            name: plain.finCategory.name,
+            color: plain.finCategory.color,
+            icon: plain.finCategory.icon
+          } : null,
+          cost_center_data: plain.finCostCenter ? {
+            id: plain.finCostCenter.id_code,
+            name: plain.finCostCenter.name,
+            code: plain.finCostCenter.code
+          } : null,
+          party_data: plain.party ? {
+            id: plain.party.id_code,
+            name: plain.party.name,
+            document: plain.party.document,
+            email: plain.party.email
+          } : null,
+          has_commission: !!commission,
+          commission,
+          commission_origin_metadata: commissionOriginMetadata
+        }
+      });
+    } catch (error) {
+      console.error('Get transaction error:', error);
+      return res.status(500).json({ error: 'Internal server error', message: 'Erro ao buscar transação' });
+    }
+  }
+);
+
 router.post(
   '/transactions',
   authenticateToken,
@@ -624,6 +835,10 @@ router.post(
     body('commission_amount')
       .optional({ nullable: true })
       .isFloat({ gt: 0 })
+    ,
+    body('allow_advance_payment')
+      .optional({ nullable: true })
+      .isBoolean()
   ],
   async (req, res) => {
     try {
@@ -661,17 +876,29 @@ router.post(
         commission_seller_id,
         commission_type,
         commission_rate,
-        commission_amount
+        commission_amount,
+        allow_advance_payment
       } = req.body;
 
+      const explicitHasCommission = Object.prototype.hasOwnProperty.call(req.body || {}, 'has_commission')
+        ? req.body.has_commission
+        : undefined;
+
+      const sellerId = commission_seller_id || salesperson_id_code;
+      const hasCommissionFields =
+        (sellerId && String(sellerId).trim() !== '') ||
+        (commission_type && String(commission_type).trim() !== '') ||
+        (commission_rate !== undefined && commission_rate !== null) ||
+        (commission_amount !== undefined && commission_amount !== null);
+
       const hasCommission =
-        salesperson_id_code ||
-        commission_seller_id ||
-        commission_rate !== undefined ||
-        commission_amount !== undefined;
+        explicitHasCommission === true
+          ? true
+          : explicitHasCommission === false
+            ? false
+            : hasCommissionFields;
 
       if (hasCommission) {
-        const sellerId = commission_seller_id || salesperson_id_code;
         if (!sellerId) {
           logicErrors.push({
             param: 'commission_seller_id',
@@ -843,6 +1070,7 @@ router.post(
                 commission_type: commission_type || null,
                 commission_rate: commission_rate !== undefined ? commission_rate : null,
                 commission_amount,
+              allow_advance_payment: !!allow_advance_payment,
                 status: 'pending',
                 created_by_user_id: user.id
               },

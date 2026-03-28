@@ -37,6 +37,11 @@ const FinancialCommission = sequelize.define('FinancialCommission', {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false
   },
+  allow_advance_payment: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
   status: {
     type: DataTypes.STRING(20),
     allowNull: false,
