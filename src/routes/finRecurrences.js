@@ -12,6 +12,44 @@ const VALID_TYPES = ['PAYABLE', 'RECEIVABLE', 'TRANSFER'];
 const VALID_FREQUENCIES = ['weekly', 'monthly', 'yearly'];
 const VALID_STATUS = ['active', 'paused', 'finished'];
 
+const toDateOnly = (value) => String(value).slice(0, 10);
+
+const parseDateUtc = (s) => new Date(`${toDateOnly(s)}T00:00:00Z`);
+
+const formatDateOnlyUtc = (date) => {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const daysInMonthUtc = (year, monthIndex) => new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+
+const computeInitialNextDueDate = (startDate, frequency, dayOfMonth) => {
+  const base = parseDateUtc(startDate);
+  if (frequency !== 'monthly') return formatDateOnlyUtc(base);
+
+  const baseYear = base.getUTCFullYear();
+  const baseMonth = base.getUTCMonth();
+  const baseDay = base.getUTCDate();
+  const targetDay = Math.max(1, Math.min(parseInt(dayOfMonth, 10) || 1, 31));
+
+  const monthDays = daysInMonthUtc(baseYear, baseMonth);
+  const dayThisMonth = Math.min(targetDay, monthDays);
+  let candidate = new Date(Date.UTC(baseYear, baseMonth, dayThisMonth));
+
+  if (baseDay > dayThisMonth) {
+    const nextMonthDate = new Date(Date.UTC(baseYear, baseMonth + 1, 1));
+    const ny = nextMonthDate.getUTCFullYear();
+    const nm = nextMonthDate.getUTCMonth();
+    const ndays = daysInMonthUtc(ny, nm);
+    const dayNextMonth = Math.min(targetDay, ndays);
+    candidate = new Date(Date.UTC(ny, nm, dayNextMonth));
+  }
+
+  return formatDateOnlyUtc(candidate);
+};
+
 /**
  * @swagger
  * components:
@@ -221,20 +259,7 @@ router.post(
         status = 'active'
       } = req.body;
 
-      // Calculate next due date based on start_date and day_of_month
-      // This is a simplified logic; usually you'd check if start_date is before or after the day_of_month in the current month
-      let nextDue = new Date(start_date);
-      // Logic to set the day of month, handling months with fewer days would be needed for robust implementation
-      // For now, let's assume the user provides a valid start_date that aligns or we just use it as base.
-      // Actually, let's trust the start_date as the first occurrence or calculate it.
-      // If start_date day matches day_of_month, fine. If not, should we adjust?
-      // Let's assume start_date IS the first due date for simplicity, or we calculate the next one.
-      // "next_due_date" is required. Let's assume start_date is the first one if not specified or logic needed.
-      // But wait, the model requires next_due_date.
-
-      // Simple logic: If start_date day <= day_of_month, use current month's day_of_month (if not passed).
-      // If start_date day > day_of_month, use next month.
-      // For now, let's set next_due_date = start_date as a default initial value if it matches requirements.
+      const next_due_date = computeInitialNextDueDate(start_date, frequency, day_of_month);
 
       const recurrence = await FinRecurrence.create({
         store_id: req.storeId,
@@ -245,7 +270,7 @@ router.post(
         status,
         start_date,
         end_date: end_date || null,
-        next_due_date: start_date, // Initial assumption
+        next_due_date,
         day_of_month,
         party_id: party_id || null,
         category_id: category_id || null,

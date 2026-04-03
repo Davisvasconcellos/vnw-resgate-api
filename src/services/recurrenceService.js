@@ -77,6 +77,34 @@ const calculateNextDueDate = (currentDate, frequency, dayOfMonth) => {
   return `${year}-${month}-${day}`;
 };
 
+const normalizeDueDate = (nextDueDate, frequency, dayOfMonth) => {
+  if (!nextDueDate) return nextDueDate;
+  if (frequency !== 'monthly') return String(nextDueDate).slice(0, 10);
+
+  const base = new Date(`${String(nextDueDate).slice(0, 10)}T00:00:00Z`);
+  const baseYear = base.getUTCFullYear();
+  const baseMonth = base.getUTCMonth();
+  const baseDay = base.getUTCDate();
+  const targetDay = Math.max(1, Math.min(parseInt(dayOfMonth, 10) || 1, 31));
+  const daysThisMonth = new Date(Date.UTC(baseYear, baseMonth + 1, 0)).getUTCDate();
+  const dayThisMonth = Math.min(targetDay, daysThisMonth);
+  let candidate = new Date(Date.UTC(baseYear, baseMonth, dayThisMonth));
+
+  if (candidate.getUTCDate() < baseDay) {
+    const nextMonth = new Date(Date.UTC(baseYear, baseMonth + 1, 1));
+    const ny = nextMonth.getUTCFullYear();
+    const nm = nextMonth.getUTCMonth();
+    const daysNextMonth = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+    const dayNextMonth = Math.min(targetDay, daysNextMonth);
+    candidate = new Date(Date.UTC(ny, nm, dayNextMonth));
+  }
+
+  const y = candidate.getUTCFullYear();
+  const m = String(candidate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(candidate.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 const generatePendingTransactions = async (targetDateInput = new Date(), storeId = null) => {
   const t = await sequelize.transaction();
 
@@ -119,11 +147,17 @@ const generatePendingTransactions = async (targetDateInput = new Date(), storeId
 
     for (const recurrence of dueRecurrences) {
       try {
+        const dueDateForTxn = normalizeDueDate(
+          recurrence.next_due_date,
+          recurrence.frequency,
+          recurrence.day_of_month
+        );
+
         const existingTxn = await FinancialTransaction.findOne({
           where: {
             store_id: recurrence.store_id,
             recurrence_id: recurrence.id_code,
-            due_date: recurrence.next_due_date
+            due_date: dueDateForTxn
           },
           transaction: t
         });
@@ -134,7 +168,7 @@ const generatePendingTransactions = async (targetDateInput = new Date(), storeId
             type: recurrence.type,
             description: recurrence.description,
             amount: recurrence.amount,
-            due_date: recurrence.next_due_date,
+            due_date: dueDateForTxn,
             status: 'provisioned',
             recurrence_id: recurrence.id_code,
             party_id: recurrence.party_id,
@@ -147,7 +181,7 @@ const generatePendingTransactions = async (targetDateInput = new Date(), storeId
 
         // Update Recurrence next_due_date
         const nextDate = calculateNextDueDate(
-          recurrence.next_due_date,
+          dueDateForTxn,
           recurrence.frequency,
           recurrence.day_of_month
         );

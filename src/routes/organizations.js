@@ -4,6 +4,7 @@ const { Organization, Store, StoreMember, User, StoreSchedule, sequelize } = req
 const { authenticateToken } = require('../middlewares/auth');
 const { body, validationResult } = require('express-validator');
 const { v4: uuidv4 } = require('uuid');
+const { normalizeStoreSlug, isReservedStoreSlug } = require('../utils/storeSlug');
 
 // GET /api/v1/organizations/me
 // Returns organizations owned by user AND stores where user is a member
@@ -124,6 +125,7 @@ router.post('/:id_code/stores', authenticateToken, [
   body('type').optional().isString().trim(),
   body('address_city').optional().isString().trim(),
   body('address_state').optional().isString().trim().isLength({ min: 2, max: 2 }).withMessage('UF deve ter 2 caracteres'),
+  body('slug').optional({ nullable: true }).isString(),
   // Other fields can be optional or use defaults
 ], async (req, res) => {
   const { id_code } = req.params;
@@ -165,11 +167,28 @@ router.post('/:id_code/stores', authenticateToken, [
       address_street, address_neighborhood, address_city, address_state,
       address_number, address_complement, zip_code,
       capacity, description, website, instagram_handle, facebook_handle,
-      latitude, longitude
+      latitude, longitude,
+      slug: rawSlug
     } = req.body;
 
-    // 3. Create Store
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + uuidv4().substring(0, 8);
+    let slug = rawSlug ? normalizeStoreSlug(rawSlug) : normalizeStoreSlug(name);
+    if (!slug) {
+      slug = `store-${uuidv4().slice(0, 8)}`;
+    }
+    if (isReservedStoreSlug(slug)) {
+      await t.rollback();
+      return res.status(400).json({ error: 'Validation error', message: 'Slug inválido' });
+    }
+    if (slug.length < 3 || slug.length > 63) {
+      await t.rollback();
+      return res.status(400).json({ error: 'Validation error', message: 'Slug deve ter entre 3 e 63 caracteres' });
+    }
+
+    const existingSlug = await Store.findOne({ where: { slug }, transaction: t });
+    if (existingSlug) {
+      await t.rollback();
+      return res.status(409).json({ error: 'Conflict', message: 'Slug já utilizado' });
+    }
 
     const store = await Store.create({
       organization_id: org.id,
@@ -277,7 +296,8 @@ router.post('/', authenticateToken, [
 
     // Create Default Store (Matriz)
     const storeName = `${name} (Matriz)`;
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + uuidv4().substring(0, 8);
+    const base = normalizeStoreSlug(name);
+    const slug = base ? `${base}-${uuidv4().substring(0, 8)}` : `store-${uuidv4().substring(0, 8)}`;
 
     const store = await Store.create({
       organization_id: org.id,

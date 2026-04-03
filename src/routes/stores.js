@@ -1,7 +1,9 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { sequelize, Store, User, Product, StoreUser, StoreSchedule, StoreMember } = require('../models');
+const { sequelize, Store, User, Product, StoreUser, StoreSchedule, StoreMember, Organization } = require('../models');
 const { authenticateToken, requireRole, requireModule } = require('../middlewares/auth');
+const { normalizeStoreSlug, isReservedStoreSlug } = require('../utils/storeSlug');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
@@ -101,6 +103,111 @@ router.get('/', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('List stores error:', error);
     res.status(500).json({
+      error: 'Internal server error',
+      message: 'Erro interno do servidor'
+    });
+  }
+});
+
+router.get('/check-slug', async (req, res) => {
+  try {
+    const rawSlug = req.query.slug;
+    const normalized = normalizeStoreSlug(rawSlug);
+
+    if (!normalized) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'slug é obrigatório'
+      });
+    }
+
+    if (isReservedStoreSlug(normalized)) {
+      return res.json({
+        success: true,
+        data: {
+          slug: normalized,
+          available: false,
+          reason: 'reserved'
+        }
+      });
+    }
+
+    const existing = await Store.findOne({
+      where: { slug: normalized },
+      attributes: ['id_code', 'slug']
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        slug: normalized,
+        available: !existing
+      }
+    });
+  } catch (error) {
+    console.error('Check store slug error:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Erro interno do servidor'
+    });
+  }
+});
+
+router.get('/resolve', async (req, res) => {
+  try {
+    const raw = req.query.subdomain || req.query.slug;
+    const slug = normalizeStoreSlug(raw);
+
+    if (!slug) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'subdomain é obrigatório'
+      });
+    }
+
+    const store = await Store.findOne({
+      where: { slug, status: 'active' },
+      attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url', 'status', 'organization_id'],
+      include: [
+        {
+          model: Organization,
+          as: 'organization',
+          attributes: ['id_code', 'name', 'logo_url', 'banner_url', 'status'],
+          required: false
+        }
+      ]
+    });
+
+    if (!store) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Loja não encontrada'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        store: {
+          id_code: store.id_code,
+          name: store.name,
+          slug: store.slug,
+          status: store.status,
+          logo_url: store.logo_url,
+          banner_url: store.banner_url
+        },
+        organization: store.organization ? {
+          id_code: store.organization.id_code,
+          name: store.organization.name,
+          status: store.organization.status,
+          logo_url: store.organization.logo_url,
+          banner_url: store.organization.banner_url
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Resolve store error:', error);
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Erro interno do servidor'
     });
@@ -274,7 +381,8 @@ router.post('/',
     body('latitude').optional().isDecimal().withMessage('Latitude inválida'),
     body('longitude').optional().isDecimal().withMessage('Longitude inválida'),
     body('zip_code').optional().isString().trim(), // Movido para manter a ordem
-    body('description').optional().isString().trim().escape().withMessage('Descrição inválida')
+    body('description').optional().isString().trim().escape().withMessage('Descrição inválida'),
+    body('slug').optional({ nullable: true }).isString()
   ],
   async (req, res) => {
     const transaction = await sequelize.transaction();
@@ -312,8 +420,26 @@ router.post('/',
         latitude,
         longitude,
         zip_code,
-        description
+        description,
+        slug: rawSlug
       } = req.body;
+
+      let slug = rawSlug ? normalizeStoreSlug(rawSlug) : normalizeStoreSlug(name);
+      if (!slug) {
+        slug = `store-${uuidv4().slice(0, 8)}`;
+      }
+      if (isReservedStoreSlug(slug)) {
+        return res.status(400).json({
+          error: 'Validation error',
+          message: 'Slug inválido'
+        });
+      }
+      if (slug.length < 3 || slug.length > 63) {
+        return res.status(400).json({
+          error: 'Validation error',
+          message: 'Slug deve ter entre 3 e 63 caracteres'
+        });
+      }
 
       // Verificar se CNPJ já existe
       const existingStore = await Store.findOne({ where: { cnpj } });
@@ -324,10 +450,22 @@ router.post('/',
         });
       }
 
+      const existingSlug = await Store.findOne({ where: { slug } });
+      if (existingSlug) {
+        if (rawSlug) {
+          return res.status(409).json({
+            error: 'Conflict',
+            message: 'Slug já utilizado'
+          });
+        }
+        slug = `${slug}-${uuidv4().slice(0, 8)}`;
+      }
+
       const store = await Store.create(
         {
           name,
           owner_id: req.user.userId, // Atribui o usuário logado como dono
+          slug,
           email,
           cnpj,
           logo_url,
@@ -478,7 +616,8 @@ router.put('/:id_code', authenticateToken, requireRole(['admin', 'manager']), [
     body('latitude').optional().isDecimal().withMessage('Latitude inválida'),
     body('longitude').optional().isDecimal().withMessage('Longitude inválida'),
     body('zip_code').optional().isString().trim(), // Movido para manter a ordem
-    body('description').optional().isString().trim().escape().withMessage('Descrição inválida')
+    body('description').optional().isString().trim().escape().withMessage('Descrição inválida'),
+    body('slug').optional({ nullable: true }).isString()
   ],
   async (req, res) => {
     try {
@@ -558,6 +697,24 @@ router.put('/:id_code', authenticateToken, requireRole(['admin', 'manager']), [
       // Mapear address_city para city
       if (req.body.address_city) {
         req.body.city = req.body.address_city;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(req.body, 'slug')) {
+        const nextSlug = normalizeStoreSlug(req.body.slug);
+        if (!nextSlug) {
+          return res.status(400).json({ error: 'Validation error', message: 'Slug inválido' });
+        }
+        if (isReservedStoreSlug(nextSlug)) {
+          return res.status(400).json({ error: 'Validation error', message: 'Slug inválido' });
+        }
+        if (nextSlug.length < 3 || nextSlug.length > 63) {
+          return res.status(400).json({ error: 'Validation error', message: 'Slug deve ter entre 3 e 63 caracteres' });
+        }
+        const existingSlug = await Store.findOne({ where: { slug: nextSlug } });
+        if (existingSlug && existingSlug.id !== store.id) {
+          return res.status(409).json({ error: 'Conflict', message: 'Slug já utilizado' });
+        }
+        req.body.slug = nextSlug;
       }
 
       await store.update(req.body);

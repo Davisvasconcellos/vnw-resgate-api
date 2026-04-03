@@ -787,6 +787,9 @@ router.post(
     body('paid_at')
       .optional({ nullable: true })
       .isISO8601(),
+    body('due_date')
+      .optional({ nullable: true })
+      .isISO8601(),
     body('party_id')
       .optional({ nullable: true })
       .isString(),
@@ -1302,10 +1305,11 @@ router.patch(
       }
 
       if (Object.prototype.hasOwnProperty.call(req.body, 'due_date') &&
-        req.body.due_date !== existing.due_date) {
+        String(req.body.due_date).slice(0, 10) !== existing.due_date &&
+        existing.status !== 'provisioned') {
         logicErrors.push({
           param: 'due_date',
-          msg: 'due_date não pode ser alterada.'
+          msg: 'due_date não pode ser alterada (exceto transações provisionadas).'
         });
       }
 
@@ -1315,6 +1319,9 @@ router.patch(
       const amount = Object.prototype.hasOwnProperty.call(req.body, 'amount')
         ? req.body.amount
         : parseFloat(existing.amount);
+      const due_date = Object.prototype.hasOwnProperty.call(req.body, 'due_date')
+        ? (req.body.due_date ? String(req.body.due_date).slice(0, 10) : null)
+        : existing.due_date;
       const party_id = Object.prototype.hasOwnProperty.call(req.body, 'party_id')
         ? req.body.party_id
         : existing.party_id;
@@ -1587,7 +1594,7 @@ router.patch(
         nf: nf || null,
         description,
         amount,
-        due_date: existing.due_date,
+        due_date: due_date || existing.due_date,
         paid_at: status === 'paid' ? paid_at : null,
         party_id: party_id || null,
         cost_center: cost_center || null,
