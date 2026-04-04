@@ -2,7 +2,8 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireRole, requireModule } = require('../middlewares/auth');
 const jwt = require('jsonwebtoken');
-const { Op } = require('sequelize');
+const { Op, literal } = require('sequelize');
+const { normalizeJamInstrumentSlotsPayload, normalizeJamInstrumentSlotsRows } = require('../utils/jamInstrumentSlots');
 const { Event, EventJam, EventJamSong, EventJamSongInstrumentSlot, EventJamSongCandidate, EventJamSongRating, EventGuest, User, EventJamMusicCatalog, TokenBlocklist } = require('../models');
 const discogsService = require('../services/discogsService');
 const { incrementMetric } = require('../utils/requestContext');
@@ -222,7 +223,8 @@ router.get('/:id/jams', authenticateToken, async (req, res) => {
 try {
   const { id } = req.params;
   const onlyReal = String(req.query.only_real || 'false').toLowerCase() === 'true';
-  const cacheKey = `${id}-${onlyReal}`;
+  const includeLyrics = String(req.query.include_lyrics || 'false').toLowerCase() === 'true';
+  const cacheKey = `v2-${id}-${onlyReal}-${includeLyrics}`;
   
   // Check cache
   const cached = jamsCache.get(cacheKey);
@@ -248,6 +250,14 @@ try {
       order: [['order_index', 'ASC']],
       include: [
         { model: EventJamSongInstrumentSlot, as: 'instrumentSlots' },
+        {
+          model: EventJamMusicCatalog,
+          as: 'catalog',
+          required: false,
+          attributes: includeLyrics
+            ? ['id_code', 'lyrics', [literal(`CASE WHEN "catalog"."lyrics" IS NULL OR "catalog"."lyrics" = '' THEN false ELSE true END`), 'has_lyrics']]
+            : ['id_code', [literal(`CASE WHEN "catalog"."lyrics" IS NULL OR "catalog"."lyrics" = '' THEN false ELSE true END`), 'has_lyrics']]
+        },
         { model: EventJamSongCandidate, as: 'candidates', include: [{ model: EventGuest, as: 'guest', include: [{ model: User, as: 'user', attributes: ['id', 'id_code', 'name', 'email', 'avatar_url'] }] }] },
         { model: EventJamSongRating, as: 'ratings' }
       ]
@@ -271,12 +281,17 @@ try {
       }
       const ratings = s.ratings || [];
       const avg = ratings.length ? (ratings.reduce((a, r) => a + r.stars, 0) / ratings.length) : null;
+      const hasLyricsRaw = s.catalog && (typeof s.catalog.get === 'function' ? s.catalog.get('has_lyrics') : s.catalog.has_lyrics);
+      const lyrics_available = hasLyricsRaw === true || hasLyricsRaw === 'true';
       return {
         id: s.id_code,
         jam_id: j.id_code,
         title: s.title,
         artist: s.artist,
         cover_image: s.cover_image,
+        catalog_id: s.catalog ? s.catalog.id_code : null,
+        lyrics_available,
+        ...(includeLyrics ? { lyrics: (s.catalog && s.catalog.lyrics) ? s.catalog.lyrics : null } : {}),
         status: s.status,
         ready: !!s.ready,
         order_index: s.order_index,
@@ -304,7 +319,8 @@ try {
 } catch (err) {
   // Failover to Cache: se o banco falhar, tenta retornar o que temos na memória (mesmo que velho)
   const onlyReal = String(req.query.only_real || 'false').toLowerCase() === 'true';
-  const cacheKey = `${req.params.id}-${onlyReal}`;
+  const includeLyrics = String(req.query.include_lyrics || 'false').toLowerCase() === 'true';
+  const cacheKey = `v2-${req.params.id}-${onlyReal}-${includeLyrics}`;
   const stale = jamsCache.get(cacheKey);
   
   if (stale) {
@@ -324,6 +340,7 @@ try {
 
 router.get('/:id/jams/songs', authenticateToken, requireRole('admin', 'master'), async (req, res) => {
   const { id } = req.params;
+  const includeLyrics = String(req.query.include_lyrics || 'false').toLowerCase() === 'true';
   const event = await Event.findOne({ where: { id_code: id } });
   if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
   if (req.user.role !== 'master' && event.created_by !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
@@ -351,6 +368,14 @@ router.get('/:id/jams/songs', authenticateToken, requireRole('admin', 'master'),
     limit,
     include: [
       { model: EventJamSongInstrumentSlot, as: 'instrumentSlots' },
+      {
+        model: EventJamMusicCatalog,
+        as: 'catalog',
+        required: false,
+        attributes: includeLyrics
+          ? ['id_code', 'lyrics', [literal(`CASE WHEN "catalog"."lyrics" IS NULL OR "catalog"."lyrics" = '' THEN false ELSE true END`), 'has_lyrics']]
+          : ['id_code', [literal(`CASE WHEN "catalog"."lyrics" IS NULL OR "catalog"."lyrics" = '' THEN false ELSE true END`), 'has_lyrics']]
+      },
       { model: EventJamSongCandidate, as: 'candidates', include: [{ model: EventGuest, as: 'guest', include: [{ model: User, as: 'user', attributes: ['id', 'id_code', 'name', 'email', 'avatar_url'] }] }] },
       { model: EventJamSongRating, as: 'ratings' }
     ]
@@ -372,11 +397,16 @@ router.get('/:id/jams/songs', authenticateToken, requireRole('admin', 'master'),
     }
     const ratings = s.ratings || [];
     const avg = ratings.length ? (ratings.reduce((a, r) => a + r.stars, 0) / ratings.length) : null;
+    const hasLyricsRaw = s.catalog && (typeof s.catalog.get === 'function' ? s.catalog.get('has_lyrics') : s.catalog.has_lyrics);
+    const lyrics_available = hasLyricsRaw === true || hasLyricsRaw === 'true';
     return {
       id: s.id_code,
       jam_id: jamIdMap[s.jam_id],
       title: s.title,
       artist: s.artist,
+      catalog_id: s.catalog ? s.catalog.id_code : null,
+      lyrics_available,
+      ...(includeLyrics ? { lyrics: (s.catalog && s.catalog.lyrics) ? s.catalog.lyrics : null } : {}),
       status: s.status,
       ready: !!s.ready,
       order_index: s.order_index,
@@ -387,6 +417,72 @@ router.get('/:id/jams/songs', authenticateToken, requireRole('admin', 'master'),
   });
 
   return res.json({ success: true, data, meta: { page: parseInt(page), page_size: parseInt(page_size), total } });
+});
+
+router.get('/:id/jams/catalog/:catalogId', authenticateToken, requireRole('admin', 'master'), async (req, res) => {
+  try {
+    const { id, catalogId } = req.params;
+    const event = await Event.findOne({ where: { id_code: id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
+
+    const item = await EventJamMusicCatalog.findOne({
+      where: { id_code: catalogId },
+      attributes: ['id_code', 'title', 'artist', 'cover_image', 'lyrics', 'chords', 'updated_at', 'created_at']
+    });
+    if (!item) return res.status(404).json({ error: 'Not Found', message: 'Catálogo não encontrado' });
+
+    const j = item.toJSON();
+    return res.json({ success: true, data: { catalog: { ...j, id: j.id_code } } });
+  } catch (error) {
+    console.error('Get catalog item error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.patch('/:id/jams/catalog/:catalogId', authenticateToken, requireRole('admin', 'master'), [
+  body('lyrics').optional({ nullable: true }).isString(),
+  body('chords').optional({ nullable: true }).isString()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'Validation error', details: errors.array() });
+
+    const { id, catalogId } = req.params;
+    const event = await Event.findOne({ where: { id_code: id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
+
+    const item = await EventJamMusicCatalog.findOne({ where: { id_code: catalogId } });
+    if (!item) return res.status(404).json({ error: 'Not Found', message: 'Catálogo não encontrado' });
+
+    const payload = {};
+    if (Object.prototype.hasOwnProperty.call(req.body, 'lyrics')) payload.lyrics = req.body.lyrics === null ? null : req.body.lyrics;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'chords')) payload.chords = req.body.chords === null ? null : req.body.chords;
+
+    await item.update(payload);
+    clearJamsCache(id);
+
+    const j = item.toJSON();
+    return res.json({
+      success: true,
+      data: {
+        catalog: {
+          id: j.id_code,
+          id_code: j.id_code,
+          title: j.title,
+          artist: j.artist,
+          cover_image: j.cover_image,
+          lyrics: j.lyrics || null,
+          chords: j.chords || null,
+          updated_at: j.updated_at
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Update catalog item error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
 });
 
 router.post('/:id/jams', authenticateToken, requireRole('admin', 'master'), [
@@ -597,8 +693,9 @@ router.post('/:id/jams/songs', authenticateToken, requireRole('admin', 'master')
         }
       }
 
-      if (Array.isArray(instrument_slots) && instrument_slots.length) {
-        for (const s of instrument_slots) {
+      const normalizedPayloadSlots = normalizeJamInstrumentSlotsPayload(instrument_slots);
+      if (normalizedPayloadSlots.length) {
+        for (const s of normalizedPayloadSlots) {
           await EventJamSongInstrumentSlot.create({ jam_song_id: song.id, instrument: s.instrument, slots: s.slots || 1, required: s.required !== undefined ? !!s.required : true, fallback_allowed: s.fallback_allowed !== undefined ? !!s.fallback_allowed : true }, { transaction: tx });
         }
       }
@@ -705,7 +802,8 @@ router.post('/:id/jams/:jamId/songs/:songId/instrument-slots', authenticateToken
   const tx = await EventJamSongInstrumentSlot.sequelize.transaction();
   try {
     await EventJamSongInstrumentSlot.destroy({ where: { jam_song_id: song.id }, transaction: tx });
-    for (const s of slots) {
+    const normalized = normalizeJamInstrumentSlotsPayload(slots);
+    for (const s of normalized) {
       await EventJamSongInstrumentSlot.create({ jam_song_id: song.id, instrument: s.instrument, slots: s.slots || 1, required: s.required !== undefined ? !!s.required : true, fallback_allowed: s.fallback_allowed !== undefined ? !!s.fallback_allowed : true }, { transaction: tx });
     }
     await tx.commit();
@@ -797,11 +895,21 @@ router.post('/:id/jams/:jamId/songs/release', authenticateToken, requireRole('ad
 
 router.get('/:id/jams/:jamId/songs/open', async (req, res) => {
   const { id, jamId } = req.params;
+  const includeLyrics = String(req.query.include_lyrics || 'false').toLowerCase() === 'true';
   const event = await Event.findOne({ where: { id_code: id } });
   if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
   const jam = await EventJam.findOne({ where: { id_code: jamId, event_id: event.id } });
   if (!jam) return res.status(404).json({ error: 'Not Found', message: 'Jam não encontrada' });
-  const songs = await EventJamSong.findAll({ where: { jam_id: jam.id, status: 'open_for_candidates' }, order: [['order_index', 'ASC']], include: [{ model: EventJamSongInstrumentSlot, as: 'instrumentSlots' }, { model: EventJamSongCandidate, as: 'candidates' }, { model: EventJamSongRating, as: 'ratings' }] });
+  const songs = await EventJamSong.findAll({
+    where: { jam_id: jam.id, status: 'open_for_candidates' },
+    order: [['order_index', 'ASC']],
+    include: [
+      { model: EventJamSongInstrumentSlot, as: 'instrumentSlots' },
+      ...(includeLyrics ? [{ model: EventJamMusicCatalog, as: 'catalog', attributes: ['lyrics'] }] : []),
+      { model: EventJamSongCandidate, as: 'candidates' },
+      { model: EventJamSongRating, as: 'ratings' }
+    ]
+  });
 
   let authUserId = null;
   const authHeader = req.headers['authorization'];
@@ -817,7 +925,8 @@ router.get('/:id/jams/:jamId/songs/open', async (req, res) => {
     myGuest = await EventGuest.findOne({ where: { event_id: event.id, user_id: authUserId } });
   }
   const data = songs.map(song => {
-    const slots = (song.instrumentSlots || []).map(s => {
+    const normalizedSlots = normalizeJamInstrumentSlotsRows(song.instrumentSlots || []);
+    const slots = normalizedSlots.map(s => {
       const approved = (song.candidates || []).filter(c => c.instrument === s.instrument && c.status === 'approved').length;
       const pending = (song.candidates || []).filter(c => c.instrument === s.instrument && c.status === 'pending').length;
       return { instrument: s.instrument, slots: s.slots, required: s.required, fallback_allowed: s.fallback_allowed, approved_count: approved, pending_count: pending, remaining_slots: Math.max(0, s.slots - approved) };
@@ -827,13 +936,30 @@ router.get('/:id/jams/:jamId/songs/open', async (req, res) => {
     const requiredCount = slots.filter(s => s.required).length;
     const approvedRequired = slots.filter(s => s.required).reduce((a, s) => a + (s.approved_count > 0 ? 1 : 0), 0);
     const myApp = (myGuest && (song.candidates || []).find(c => c.event_guest_id === myGuest.id)) || null;
-    return { id: song.id_code, jam_id: jam.id_code, title: song.title, artist: song.artist, key: song.key, tempo_bpm: song.tempo_bpm, status: song.status, ready: !!song.ready, order_index: song.order_index, release_batch: song.release_batch, instrument_slots: slots, my_application: myApp ? { instrument: myApp.instrument, status: myApp.status } : null, lineup_completeness: { required_instruments: requiredCount, approved_required: approvedRequired, is_full: approvedRequired === requiredCount }, rating_summary: ratings.length ? { average: Number(avg.toFixed(2)), count: ratings.length } : null };
+    return {
+      id: song.id_code,
+      jam_id: jam.id_code,
+      title: song.title,
+      artist: song.artist,
+      ...(includeLyrics ? { lyrics: (song.catalog && song.catalog.lyrics) ? song.catalog.lyrics : null } : {}),
+      key: song.key,
+      tempo_bpm: song.tempo_bpm,
+      status: song.status,
+      ready: !!song.ready,
+      order_index: song.order_index,
+      release_batch: song.release_batch,
+      instrument_slots: slots,
+      my_application: myApp ? { instrument: myApp.instrument, status: myApp.status } : null,
+      lineup_completeness: { required_instruments: requiredCount, approved_required: approvedRequired, is_full: approvedRequired === requiredCount },
+      rating_summary: ratings.length ? { average: Number(avg.toFixed(2)), count: ratings.length } : null
+    };
   });
   return res.json({ success: true, data: { jam: { id: jam.id_code, event_id: event.id_code, name: jam.name, status: jam.status }, songs: data } });
 });
 
 router.get('/:id/jams/open', authenticateToken, async (req, res) => {
   const { id } = req.params;
+  const includeLyrics = String(req.query.include_lyrics || 'false').toLowerCase() === 'true';
   const event = await Event.findOne({ where: { id_code: id } });
   if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
   const guest = await EventGuest.findOne({ where: { event_id: event.id, user_id: req.user.userId } });
@@ -841,11 +967,21 @@ router.get('/:id/jams/open', authenticateToken, async (req, res) => {
 
   const jams = await EventJam.findAll({ where: { event_id: event.id } });
   const jamIds = jams.map(j => j.id);
-  const songs = await EventJamSong.findAll({ where: { jam_id: { [Op.in]: jamIds }, status: 'open_for_candidates' }, order: [['order_index', 'ASC']], include: [{ model: EventJamSongInstrumentSlot, as: 'instrumentSlots' }, { model: EventJamSongCandidate, as: 'candidates' }, { model: EventJamSongRating, as: 'ratings' }] });
+  const songs = await EventJamSong.findAll({
+    where: { jam_id: { [Op.in]: jamIds }, status: 'open_for_candidates' },
+    order: [['order_index', 'ASC']],
+    include: [
+      { model: EventJamSongInstrumentSlot, as: 'instrumentSlots' },
+      ...(includeLyrics ? [{ model: EventJamMusicCatalog, as: 'catalog', attributes: ['lyrics'] }] : []),
+      { model: EventJamSongCandidate, as: 'candidates' },
+      { model: EventJamSongRating, as: 'ratings' }
+    ]
+  });
 
   const jamsById = jams.reduce((acc, j) => { acc[j.id] = { id: j.id_code, name: j.name, status: j.status }; return acc; }, {});
   const data = songs.map((song, index) => {
-    const slots = (song.instrumentSlots || []).map(s => {
+    const normalizedSlots = normalizeJamInstrumentSlotsRows(song.instrumentSlots || []);
+    const slots = normalizedSlots.map(s => {
       const approved = (song.candidates || []).filter(c => c.instrument === s.instrument && c.status === 'approved').length;
       const pending = (song.candidates || []).filter(c => c.instrument === s.instrument && c.status === 'pending').length;
       return { instrument: s.instrument, slots: s.slots, required: s.required, fallback_allowed: s.fallback_allowed, approved_count: approved, pending_count: pending, remaining_slots: Math.max(0, s.slots - approved) };
@@ -855,7 +991,23 @@ router.get('/:id/jams/open', authenticateToken, async (req, res) => {
     const requiredCount = slots.filter(s => s.required).length;
     const approvedRequired = slots.filter(s => s.required).reduce((a, s) => a + (s.approved_count > 0 ? 1 : 0), 0);
     const myApp = (song.candidates || []).find(c => c.event_guest_id === guest.id) || null;
-    return { jam: jamsById[song.jam_id] || { id: null }, id: song.id_code, jam_id: jamsById[song.jam_id]?.id, title: song.title, artist: song.artist, status: song.status, ready: !!song.ready, order_index: song.order_index, queue_position: index + 1, release_batch: song.release_batch, instrument_slots: slots, my_application: myApp ? { instrument: myApp.instrument, status: myApp.status } : null, lineup_completeness: { required_instruments: requiredCount, approved_required: approvedRequired, is_full: approvedRequired === requiredCount }, rating_summary: ratings.length ? { average: Number(avg.toFixed(2)), count: ratings.length } : null };
+    return {
+      jam: jamsById[song.jam_id] || { id: null },
+      id: song.id_code,
+      jam_id: jamsById[song.jam_id]?.id,
+      title: song.title,
+      artist: song.artist,
+      ...(includeLyrics ? { lyrics: (song.catalog && song.catalog.lyrics) ? song.catalog.lyrics : null } : {}),
+      status: song.status,
+      ready: !!song.ready,
+      order_index: song.order_index,
+      queue_position: index + 1,
+      release_batch: song.release_batch,
+      instrument_slots: slots,
+      my_application: myApp ? { instrument: myApp.instrument, status: myApp.status } : null,
+      lineup_completeness: { required_instruments: requiredCount, approved_required: approvedRequired, is_full: approvedRequired === requiredCount },
+      rating_summary: ratings.length ? { average: Number(avg.toFixed(2)), count: ratings.length } : null
+    };
   });
   return res.json({ success: true, data });
 });

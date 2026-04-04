@@ -35,6 +35,8 @@ const SysModule = require('./SysModule');
 const EventJamMusicSuggestion = require('./EventJamMusicSuggestion');
 const EventJamMusicSuggestionParticipant = require('./EventJamMusicSuggestionParticipant');
 const EventJamMusicCatalog = require('./EventJamMusicCatalog');
+const EventTicketType = require('./EventTicketType');
+const EventTicket = require('./EventTicket');
 const Organization = require('./Organization');
 const StoreMember = require('./StoreMember');
 const StoreInvite = require('./StoreInvite');
@@ -158,6 +160,18 @@ FootballTeam.hasMany(User, { foreignKey: 'team_user', as: 'users' });
 // Event associations
 Event.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 User.hasMany(Event, { foreignKey: 'created_by', as: 'createdEvents' });
+
+Event.hasMany(EventTicketType, { foreignKey: 'event_id', as: 'ticketTypes' });
+EventTicketType.belongsTo(Event, { foreignKey: 'event_id', as: 'event' });
+
+Event.hasMany(EventTicket, { foreignKey: 'event_id', as: 'tickets' });
+EventTicket.belongsTo(Event, { foreignKey: 'event_id', as: 'event' });
+
+EventTicketType.hasMany(EventTicket, { foreignKey: 'ticket_type_id', as: 'tickets' });
+EventTicket.belongsTo(EventTicketType, { foreignKey: 'ticket_type_id', as: 'ticketType' });
+
+User.hasMany(EventTicket, { foreignKey: 'user_id', as: 'eventTickets' });
+EventTicket.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
 Event.hasMany(EventQuestion, { foreignKey: 'event_id', as: 'questions' });
 EventQuestion.belongsTo(Event, { foreignKey: 'event_id', as: 'event' });
@@ -356,6 +370,8 @@ module.exports = {
   ,EventJamMusicSuggestion
   ,EventJamMusicSuggestionParticipant
   ,EventJamMusicCatalog
+  ,EventTicketType
+  ,EventTicket
   ,Organization
   ,StoreMember
   ,StoreInvite

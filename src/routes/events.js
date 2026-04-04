@@ -3,9 +3,10 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireRole, requireModule } = require('../middlewares/auth');
 const { sequelize } = require('../config/database');
 const { Op, fn, col } = require('sequelize');
-const { Event, EventQuestion, EventResponse, EventAnswer, User, EventGuest, TokenBlocklist } = require('../models');
+const { Event, EventQuestion, EventResponse, EventAnswer, User, EventGuest, TokenBlocklist, EventTicketType, EventTicket } = require('../models');
 const jwt = require('jsonwebtoken');
 const { incrementMetric } = require('../utils/requestContext');
+const { verifyEventTicketQrToken } = require('../utils/eventTicketQr');
 
 const router = express.Router();
 
@@ -258,11 +259,6 @@ router.post('/', authenticateToken, requireRole('admin', 'master'), requireModul
     const startNorm = normalizeLocalIso(start_datetime);
     const endNorm = normalizeLocalIso(end_datetime);
     if (startNorm && endNorm) {
-      const startDatePart = startNorm.split('T')[0];
-      const endDatePart = endNorm.split('T')[0];
-      if (startDatePart !== endDatePart) {
-        return res.status(400).json({ error: 'Validation error', message: 'end_datetime deve ser no mesmo dia do start_datetime' });
-      }
       if (endNorm < startNorm) {
         return res.status(400).json({ error: 'Validation error', message: 'end_datetime não pode ser anterior a start_datetime' });
       }
@@ -280,6 +276,7 @@ router.post('/', authenticateToken, requireRole('admin', 'master'), requireModul
     const endParts = endNorm.split('T');
 
     const date = startParts[0];
+    const end_date = endParts[0];
     const start_time_val = startParts[1];
     const end_time_val = endParts[1];
 
@@ -295,6 +292,7 @@ router.post('/', authenticateToken, requireRole('admin', 'master'), requireModul
         slug,
         banner_url,
         date,
+        end_date,
         start_time: start_time_val,
         end_time: end_time_val,
         description,
@@ -499,20 +497,43 @@ router.get('/', authenticateToken, requireRole('admin', 'master'), requireModule
       if (from) where.date[Op.gte] = from;
       if (to) where.date[Op.lte] = to;
     }
-  if (status) {
-      // Ajuste para filtro de status usando date + time
+    if (status) {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
       const currentTime = now.toTimeString().split(' ')[0];
 
       if (status === 'upcoming') {
-        where.date = { [Op.gt]: today };
+        where[Op.and] = (where[Op.and] || []).concat([{
+          [Op.or]: [
+            { date: { [Op.gt]: today } },
+            { date: today, [Op.or]: [{ start_time: null }, { start_time: { [Op.gt]: currentTime } }] }
+          ]
+        }]);
       } else if (status === 'past') {
-        where.date = { [Op.lt]: today };
+        where[Op.and] = (where[Op.and] || []).concat([{
+          [Op.or]: [
+            { end_date: { [Op.lt]: today } },
+            { end_date: null, date: { [Op.lt]: today } },
+            { end_date: null, date: today, end_time: { [Op.lt]: currentTime } },
+            { end_date: today, end_time: { [Op.lt]: currentTime } }
+          ]
+        }]);
       } else if (status === 'ongoing') {
-        where.date = today;
-        where.start_time = { [Op.lte]: currentTime };
-        where.end_time = { [Op.gte]: currentTime };
+        where[Op.and] = (where[Op.and] || []).concat([
+          {
+            [Op.or]: [
+              { date: { [Op.lt]: today } },
+              { date: today, start_time: { [Op.lte]: currentTime } }
+            ]
+          },
+          {
+            [Op.or]: [
+              { end_date: { [Op.gt]: today } },
+              { end_date: null, date: today, [Op.or]: [{ end_time: null }, { end_time: { [Op.gte]: currentTime } }] },
+              { end_date: today, [Op.or]: [{ end_time: null }, { end_time: { [Op.gte]: currentTime } }] }
+            ]
+          }
+        ]);
       }
     }
 
@@ -525,7 +546,7 @@ router.get('/', authenticateToken, requireRole('admin', 'master'), requireModule
     const rows = await Event.findAll({
       where,
       attributes: [
-        'id_code', 'name', 'slug', 'description', 'banner_url', 'date', 'start_time', 'end_time', 'created_at', 'status',
+        'id_code', 'name', 'slug', 'description', 'banner_url', 'date', 'end_date', 'start_time', 'end_time', 'created_at', 'status',
         [sequelize.literal('(SELECT COUNT(*) FROM event_questions AS eq WHERE eq.event_id = "Event"."id")'), 'questions_count']
       ],
       order: [[sortBy, order]],
@@ -540,7 +561,8 @@ router.get('/', authenticateToken, requireRole('admin', 'master'), requireModule
            // Mapeia para manter compatibilidade com frontend se necessário
            const ev = r.toJSON();
            ev.start_datetime = ev.date && ev.start_time ? `${ev.date}T${ev.start_time}` : null;
-           ev.end_datetime = ev.date && ev.end_time ? `${ev.date}T${ev.end_time}` : null;
+           const endDate = ev.end_date || ev.date;
+           ev.end_datetime = endDate && ev.end_time ? `${endDate}T${ev.end_time}` : null;
            return sanitizeEvent(ev);
         }) 
       },
@@ -748,17 +770,13 @@ router.patch('/:id', authenticateToken, requireRole('admin', 'master'), requireM
     };
 
     const baseStart = event.date && event.start_time ? `${event.date}T${String(event.start_time).substring(0, 5)}` : null;
-    const baseEnd = event.date && event.end_time ? `${event.date}T${String(event.end_time).substring(0, 5)}` : null;
+    const baseEndDate = event.end_date || event.date;
+    const baseEnd = baseEndDate && event.end_time ? `${baseEndDate}T${String(event.end_time).substring(0, 5)}` : null;
 
     const newStart = updateData.start_datetime !== undefined ? normalizeLocalIso(updateData.start_datetime) : baseStart;
     const newEnd = updateData.end_datetime !== undefined ? normalizeLocalIso(updateData.end_datetime) : baseEnd;
 
     if (newStart && newEnd) {
-      const startDatePart = newStart.split('T')[0];
-      const endDatePart = newEnd.split('T')[0];
-      if (startDatePart !== endDatePart) {
-        return res.status(400).json({ error: 'Validation error', message: 'end_datetime deve ser no mesmo dia do start_datetime' });
-      }
       if (newEnd < newStart) {
         return res.status(400).json({ error: 'Validation error', message: 'end_datetime não pode ser anterior a start_datetime' });
       }
@@ -787,6 +805,7 @@ router.patch('/:id', authenticateToken, requireRole('admin', 'master'), requireM
       const norm = normalizeLocalIso(updateData.end_datetime);
       if (norm) {
         const parts = norm.split('T');
+        updateData.end_date = parts[0];
         updateData.end_time = parts[1];
       }
       delete updateData.end_datetime;
@@ -2174,6 +2193,246 @@ router.post('/:id/guests', authenticateToken, requireRole('admin', 'master'), [
       const payload = formatDuplicateError(error);
       return res.status(409).json(payload);
     }
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.get('/:id/ticket-types', authenticateToken, requireRole('admin', 'master'), requireModule('events'), async (req, res) => {
+  try {
+    const event = await Event.findOne({ where: { id_code: req.params.id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied', message: 'Acesso negado' });
+    }
+
+    const rows = await EventTicketType.findAll({
+      where: { event_id: event.id },
+      order: [['sort_order', 'ASC'], ['created_at', 'ASC']]
+    });
+
+    return res.json({
+      success: true,
+      data: rows.map(r => {
+        const j = r.toJSON();
+        return { ...j, id: j.id_code };
+      })
+    });
+  } catch (error) {
+    console.error('List ticket types error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.post('/:id/ticket-types', authenticateToken, requireRole('admin', 'master'), requireModule('events'), [
+  body('name').trim().isLength({ min: 2, max: 255 }),
+  body('total_quantity').optional({ nullable: true }).isInt({ min: 0 }).toInt(),
+  body('price_amount').optional({ nullable: true }).isFloat({ min: 0 }),
+  body('currency').optional({ nullable: true }).isString(),
+  body('start_at').optional({ nullable: true }).isISO8601(),
+  body('end_at').optional({ nullable: true }).isISO8601(),
+  body('sort_order').optional({ nullable: true }).isInt().toInt(),
+  body('status').optional({ nullable: true }).isIn(['active', 'inactive'])
+], async (req, res) => {
+  try {
+    const event = await Event.findOne({ where: { id_code: req.params.id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied', message: 'Acesso negado' });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation error', details: errors.array() });
+    }
+
+    const row = await EventTicketType.create({
+      event_id: event.id,
+      name: req.body.name,
+      description: req.body.description || null,
+      price_amount: req.body.price_amount !== undefined && req.body.price_amount !== null ? req.body.price_amount : 0,
+      currency: req.body.currency || 'BRL',
+      total_quantity: req.body.total_quantity !== undefined ? req.body.total_quantity : null,
+      start_at: req.body.start_at ? new Date(req.body.start_at) : null,
+      end_at: req.body.end_at ? new Date(req.body.end_at) : null,
+      sort_order: req.body.sort_order !== undefined && req.body.sort_order !== null ? req.body.sort_order : 0,
+      status: req.body.status || 'active'
+    });
+
+    const j = row.toJSON();
+    return res.status(201).json({ success: true, data: { ...j, id: j.id_code } });
+  } catch (error) {
+    console.error('Create ticket type error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.patch('/:id/ticket-types/:ticket_type_id', authenticateToken, requireRole('admin', 'master'), requireModule('events'), async (req, res) => {
+  try {
+    const event = await Event.findOne({ where: { id_code: req.params.id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied', message: 'Acesso negado' });
+    }
+
+    const ticketType = await EventTicketType.findOne({ where: { id_code: req.params.ticket_type_id, event_id: event.id } });
+    if (!ticketType) return res.status(404).json({ error: 'Not Found', message: 'Lote/Tipo não encontrado' });
+
+    const payload = {};
+    if (Object.prototype.hasOwnProperty.call(req.body, 'name')) payload.name = req.body.name;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'description')) payload.description = req.body.description;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'price_amount')) payload.price_amount = req.body.price_amount;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'currency')) payload.currency = req.body.currency;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'total_quantity')) payload.total_quantity = req.body.total_quantity;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'start_at')) payload.start_at = req.body.start_at ? new Date(req.body.start_at) : null;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'end_at')) payload.end_at = req.body.end_at ? new Date(req.body.end_at) : null;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'sort_order')) payload.sort_order = req.body.sort_order;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'status')) payload.status = req.body.status;
+
+    await ticketType.update(payload);
+    const j = ticketType.toJSON();
+    return res.json({ success: true, data: { ...j, id: j.id_code } });
+  } catch (error) {
+    console.error('Update ticket type error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.post('/:id/tickets/checkin', authenticateToken, requireRole('admin', 'master'), requireModule('events'), [
+  body('qr_token').isString().withMessage('qr_token é obrigatório')
+], async (req, res) => {
+  try {
+    const event = await Event.findOne({ where: { id_code: req.params.id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied', message: 'Acesso negado' });
+    }
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation error', details: errors.array() });
+    }
+
+    let payload;
+    try {
+      payload = verifyEventTicketQrToken(req.body.qr_token);
+    } catch (e) {
+      const code = e && e.name ? e.name : (e && e.code ? e.code : null);
+      if (code === 'TokenExpiredError') {
+        return res.status(400).json({ error: 'Validation error', message: 'QR expirado' });
+      }
+      return res.status(400).json({ error: 'Validation error', message: 'QR inválido' });
+    }
+
+    if (String(payload.eid) !== String(req.params.id)) {
+      return res.status(400).json({ error: 'Validation error', message: 'QR não pertence a este evento' });
+    }
+
+    const ticket = await EventTicket.findOne({
+      where: { id_code: payload.tid, event_id: event.id },
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }]
+    });
+    if (!ticket) return res.status(404).json({ error: 'Not Found', message: 'Ingresso não encontrado' });
+
+    if (ticket.status === 'checked_in') {
+      return res.json({ success: true, data: { ticket_id: ticket.id_code, status: ticket.status, already_checked_in: true } });
+    }
+    if (ticket.status !== 'reserved') {
+      return res.status(400).json({ error: 'Validation error', message: 'Ingresso inválido para check-in' });
+    }
+    if (ticket.expires_at && new Date(ticket.expires_at).getTime() < Date.now()) {
+      await ticket.update({ status: 'expired' });
+      return res.status(400).json({ error: 'Validation error', message: 'Ingresso expirado' });
+    }
+
+    const now = new Date();
+    await sequelize.transaction(async (t) => {
+      await ticket.update({ status: 'checked_in', checked_in_at: now }, { transaction: t });
+
+      const userId = ticket.user_id;
+      const userName = ticket.user ? ticket.user.name : null;
+      const userEmail = ticket.user ? ticket.user.email : null;
+
+      const existingGuest = await EventGuest.findOne({ where: { event_id: event.id, user_id: userId }, transaction: t });
+      if (!existingGuest) {
+        await EventGuest.create({
+          event_id: event.id,
+          user_id: userId,
+          guest_name: userName || 'Guest',
+          guest_email: userEmail || null,
+          type: 'normal',
+          source: 'invited',
+          rsvp_confirmed: true,
+          rsvp_at: now,
+          invited_at: now,
+          invited_by_user_id: req.user.userId
+        }, { transaction: t });
+      } else if (!existingGuest.rsvp_confirmed) {
+        await existingGuest.update({ rsvp_confirmed: true, rsvp_at: now }, { transaction: t });
+      }
+    });
+
+    return res.json({ success: true, data: { ticket_id: ticket.id_code, status: 'checked_in', checked_in_at: now } });
+  } catch (error) {
+    console.error('Ticket checkin (qr) error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.post('/:id/tickets/:ticket_id/checkin', authenticateToken, requireRole('admin', 'master'), requireModule('events'), async (req, res) => {
+  try {
+    const event = await Event.findOne({ where: { id_code: req.params.id } });
+    if (!event) return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    if (req.user.role !== 'master' && event.created_by !== req.user.userId) {
+      return res.status(403).json({ error: 'Access denied', message: 'Acesso negado' });
+    }
+
+    const ticket = await EventTicket.findOne({
+      where: { id_code: req.params.ticket_id, event_id: event.id },
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }]
+    });
+    if (!ticket) return res.status(404).json({ error: 'Not Found', message: 'Ingresso não encontrado' });
+
+    if (ticket.status === 'checked_in') {
+      return res.json({ success: true, data: { ticket_id: ticket.id_code, status: ticket.status, already_checked_in: true } });
+    }
+    if (ticket.status !== 'reserved') {
+      return res.status(400).json({ error: 'Validation error', message: 'Ingresso inválido para check-in' });
+    }
+    if (ticket.expires_at && new Date(ticket.expires_at).getTime() < Date.now()) {
+      await ticket.update({ status: 'expired' });
+      return res.status(400).json({ error: 'Validation error', message: 'Ingresso expirado' });
+    }
+
+    const now = new Date();
+    await sequelize.transaction(async (t) => {
+      await ticket.update({ status: 'checked_in', checked_in_at: now }, { transaction: t });
+
+      const userId = ticket.user_id;
+      const userName = ticket.user ? ticket.user.name : null;
+      const userEmail = ticket.user ? ticket.user.email : null;
+
+      const existingGuest = await EventGuest.findOne({ where: { event_id: event.id, user_id: userId }, transaction: t });
+      if (!existingGuest) {
+        await EventGuest.create({
+          event_id: event.id,
+          user_id: userId,
+          guest_name: userName || 'Guest',
+          guest_email: userEmail || null,
+          type: 'normal',
+          source: 'invited',
+          rsvp_confirmed: true,
+          rsvp_at: now,
+          invited_at: now,
+          invited_by_user_id: req.user.userId
+        }, { transaction: t });
+      } else if (!existingGuest.rsvp_confirmed) {
+        await existingGuest.update({ rsvp_confirmed: true, rsvp_at: now }, { transaction: t });
+      }
+    });
+
+    return res.json({ success: true, data: { ticket_id: ticket.id_code, status: 'checked_in', checked_in_at: now } });
+  } catch (error) {
+    console.error('Ticket checkin error:', error);
     return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
   }
 });

@@ -38,6 +38,10 @@ const Event = sequelize.define('Event', {
     type: DataTypes.DATEONLY,
     allowNull: false
   },
+  end_date: {
+    type: DataTypes.DATEONLY,
+    allowNull: true
+  },
   status: {
     type: DataTypes.STRING(50),
     allowNull: false,

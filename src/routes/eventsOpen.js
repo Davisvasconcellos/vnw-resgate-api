@@ -2,10 +2,11 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { Op, fn, col } = require('sequelize');
 const { sequelize } = require('../config/database');
-const { Event, EventQuestion, EventResponse, EventAnswer, User, EventGuest, TokenBlocklist } = require('../models');
+const { Event, EventQuestion, EventResponse, EventAnswer, User, EventGuest, TokenBlocklist, EventTicketType, EventTicket } = require('../models');
 const { authenticateToken } = require('../middlewares/auth');
 const jwt = require('jsonwebtoken');
 const admin = require('firebase-admin');
+const { buildEventTicketQrToken } = require('../utils/eventTicketQr');
 
 // Ensure Firebase Admin is initialized (reuse if already initialized in auth)
 if (!admin.apps.length) {
@@ -22,6 +23,18 @@ if (!admin.apps.length) {
 }
 
 const router = express.Router();
+
+const toDateOnly = (d) => d.toISOString().slice(0, 10);
+const toTimeOnly = (d) => d.toISOString().slice(11, 19);
+const buildStartEndDatetime = (event) => {
+  const date = event.date || null;
+  const endDate = event.end_date || event.date || null;
+  const startTime = event.start_time || null;
+  const endTime = event.end_time || null;
+  const start_datetime = date && startTime ? `${date}T${startTime}` : null;
+  const end_datetime = endDate && endTime ? `${endDate}T${endTime}` : null;
+  return { start_datetime, end_datetime };
+};
 
 /**
  * @swagger
@@ -159,38 +172,103 @@ router.get('/public', async (req, res) => {
     const sortBy = sortByAllowed.includes(req.query.sort_by) ? req.query.sort_by : 'start_datetime';
     const { name, slug, status, from, to, date } = req.query;
 
-    const where = {};
+    const where = { status: 'published' };
     if (name) where.name = { [Op.like]: `%${name}%` };
     if (slug) where.slug = { [Op.like]: `%${slug}%` };
-    if (from || to) {
-      where.start_datetime = {};
-      if (from) where.start_datetime[Op.gte] = new Date(from);
-      if (to) where.start_datetime[Op.lte] = new Date(to);
+    const now = new Date();
+    const todayDate = toDateOnly(now);
+    const nowTime = toTimeOnly(now);
+
+    if (from) {
+      const d = new Date(from);
+      if (!Number.isNaN(d.getTime())) {
+        const fromDate = toDateOnly(d);
+        const fromTime = toTimeOnly(d);
+        where[Op.and] = (where[Op.and] || []).concat([{
+          [Op.or]: [
+            { date: { [Op.gt]: fromDate } },
+            { date: fromDate, start_time: { [Op.gte]: fromTime } }
+          ]
+        }]);
+      }
     }
+
+    if (to) {
+      const d = new Date(to);
+      if (!Number.isNaN(d.getTime())) {
+        const toDate = toDateOnly(d);
+        const toTime = toTimeOnly(d);
+        where[Op.and] = (where[Op.and] || []).concat([{
+          [Op.or]: [
+            { date: { [Op.lt]: toDate } },
+            { date: toDate, start_time: { [Op.lte]: toTime } }
+          ]
+        }]);
+      }
+    }
+
     if (date) {
       const d = new Date(date);
-      // Evento ocorrendo na data informada
-      where.start_datetime = Object.assign(where.start_datetime || {}, { [Op.lte]: d });
-      where.end_datetime = { [Op.gte]: d };
+      if (!Number.isNaN(d.getTime())) {
+        const targetDate = toDateOnly(d);
+        const targetTime = toTimeOnly(d);
+        where[Op.and] = (where[Op.and] || []).concat([
+          { date: { [Op.lte]: targetDate } },
+          {
+            [Op.or]: [
+              { end_date: null, date: targetDate },
+              { end_date: { [Op.gte]: targetDate } }
+            ]
+          }
+        ]);
+      }
     }
+
     if (status) {
-      const now = new Date();
       if (status === 'upcoming') {
-        where.start_datetime = Object.assign(where.start_datetime || {}, { [Op.gt]: now });
+        where[Op.and] = (where[Op.and] || []).concat([{
+          [Op.or]: [
+            { date: { [Op.gt]: todayDate } },
+            { date: todayDate, [Op.or]: [{ start_time: null }, { start_time: { [Op.gt]: nowTime } }] }
+          ]
+        }]);
       } else if (status === 'ongoing') {
-        where.start_datetime = Object.assign(where.start_datetime || {}, { [Op.lte]: now });
-        where.end_datetime = { [Op.gte]: now };
+        where[Op.and] = (where[Op.and] || []).concat([
+          {
+            [Op.or]: [
+              { date: { [Op.lt]: todayDate } },
+              { date: todayDate, start_time: Object.assign(where.start_time || {}, { [Op.lte]: nowTime }) }
+            ]
+          },
+          {
+            [Op.or]: [
+              { end_date: { [Op.gt]: todayDate } },
+              { end_date: null, date: todayDate, [Op.or]: [{ end_time: null }, { end_time: { [Op.gte]: nowTime } }] },
+              { end_date: todayDate, [Op.or]: [{ end_time: null }, { end_time: { [Op.gte]: nowTime } }] }
+            ]
+          }
+        ]);
       } else if (status === 'past') {
-        where.end_datetime = { [Op.lt]: now };
+        where[Op.or] = [
+          { end_date: { [Op.lt]: todayDate } },
+          { end_date: null, date: { [Op.lt]: todayDate } },
+          { end_date: null, date: todayDate, end_time: { [Op.lt]: nowTime } },
+          { end_date: todayDate, end_time: { [Op.lt]: nowTime } }
+        ];
       }
     }
 
     const offset = (page - 1) * limit;
     const total = await Event.count({ where });
+    const orderClause = (() => {
+      if (sortBy === 'start_datetime') return [['date', order], ['start_time', order]];
+      if (sortBy === 'end_datetime') return [['date', order], ['end_time', order]];
+      return [[sortBy, order]];
+    })();
     const rows = await Event.findAll({
       where,
-      attributes: ['id', 'id_code', 'name', 'slug', 'banner_url', 'start_datetime', 'end_datetime', 'public_url', 'gallery_url', 'place', 'description', 'created_at'],
-      order: [[sortBy, order]],
+      attributes: ['id', 'id_code', 'name', 'slug', 'banner_url', 'date', 'end_date', 'start_time', 'end_time', 'public_url', 'gallery_url', 'place', 'description', 'created_at'],
+      order: orderClause,
       offset,
       limit
     });
@@ -201,6 +279,9 @@ router.get('/public', async (req, res) => {
         events: rows.map(r => {
           const j = r.toJSON();
           j.id = j.id_code; // Sanitiza ID
+          const dt = buildStartEndDatetime(j);
+          j.start_datetime = dt.start_datetime;
+          j.end_datetime = dt.end_datetime;
           return j;
         })
       },
@@ -221,7 +302,7 @@ router.get('/public', async (req, res) => {
 router.get('/:id/detail', async (req, res) => {
   try {
     const { id } = req.params;
-    const event = await Event.findOne({ where: { id_code: id } });
+    const event = await Event.findOne({ where: { id_code: id, status: 'published' } });
     if (!event) {
       return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
     }
@@ -239,6 +320,7 @@ router.get('/:id/detail', async (req, res) => {
       start_time: event.start_time,
       end_time: event.end_time,
       date: event.date,
+      end_date: event.end_date || event.date,
       status: event.status,
       resp_email: event.resp_email,
       resp_name: event.resp_name,
@@ -254,6 +336,9 @@ router.get('/:id/detail', async (req, res) => {
       created_at: event.created_at,
       updated_at: event.updated_at
     };
+    const dt = buildStartEndDatetime(payload);
+    payload.start_datetime = dt.start_datetime;
+    payload.end_datetime = dt.end_datetime;
 
     return res.json({ success: true, data: payload });
   } catch (error) {
@@ -266,7 +351,7 @@ router.get('/:id/detail', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const event = await Event.findOne({ where: { id_code: id } });
+    const event = await Event.findOne({ where: { id_code: id, status: 'published' } });
     if (!event) {
       return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
     }
@@ -284,6 +369,7 @@ router.get('/:id', async (req, res) => {
       start_time: event.start_time,
       end_time: event.end_time,
       date: event.date,
+      end_date: event.end_date || event.date,
       status: event.status,
       resp_email: event.resp_email,
       resp_name: event.resp_name,
@@ -299,6 +385,9 @@ router.get('/:id', async (req, res) => {
       created_at: event.created_at,
       updated_at: event.updated_at
     };
+    const dt = buildStartEndDatetime(payload);
+    payload.start_datetime = dt.start_datetime;
+    payload.end_datetime = dt.end_datetime;
 
     return res.json({ success: true, data: payload });
   } catch (error) {
@@ -471,6 +560,276 @@ router.post('/:id/checkin', authenticateToken, [
   }
 });
 
+router.post('/:id/tickets/reserve', authenticateToken, [
+  body('ticket_type_id').optional({ nullable: true }).isString()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation error', message: 'Dados inválidos', details: errors.array() });
+    }
+
+    const { id } = req.params;
+    const event = await Event.findOne({ where: { id_code: id } });
+    if (!event) {
+      return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    }
+    if (event.status !== 'published') {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Evento não está publicado para reservas',
+        status: event.status
+      });
+    }
+
+    const now = new Date();
+    const endDate = event.end_date || event.date;
+    const endDt = event.end_time ? new Date(`${endDate}T${event.end_time}`) : new Date(`${endDate}T23:59:59`);
+    if (now > endDt) {
+      return res.status(400).json({ error: 'Validation error', message: 'Evento encerrado' });
+    }
+
+    const userId = req.user.userId;
+    const requestedTypeIdCode = req.body.ticket_type_id ? String(req.body.ticket_type_id) : null;
+
+    const t = await sequelize.transaction();
+    try {
+      const existingActive = await EventTicket.findOne({
+        where: { event_id: event.id, user_id: userId, status: { [Op.in]: ['reserved', 'checked_in'] } },
+        transaction: t,
+        lock: t.LOCK.UPDATE
+      });
+      if (existingActive) {
+        await t.commit();
+        const qr_token = buildEventTicketQrToken({
+          ticket_id: existingActive.id_code,
+          event_id: event.id_code,
+          expires_at: existingActive.expires_at || endDt
+        });
+        return res.json({
+          success: true,
+          data: {
+            ticket_id: existingActive.id_code,
+            status: existingActive.status,
+            already_reserved: true,
+            qr_token
+          }
+        });
+      }
+
+      let ticketType = null;
+      if (requestedTypeIdCode) {
+        ticketType = await EventTicketType.findOne({
+          where: { id_code: requestedTypeIdCode, event_id: event.id, status: 'active' },
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+        if (!ticketType) {
+          await t.rollback();
+          return res.status(404).json({ error: 'Not Found', message: 'Lote/Tipo de ingresso não encontrado' });
+        }
+      } else {
+        ticketType = await EventTicketType.findOne({
+          where: {
+            event_id: event.id,
+            status: 'active',
+            [Op.and]: [
+              { [Op.or]: [{ start_at: null }, { start_at: { [Op.lte]: now } }] },
+              { [Op.or]: [{ end_at: null }, { end_at: { [Op.gte]: now } }] }
+            ]
+          },
+          order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+      }
+
+      if (!ticketType) {
+        ticketType = await EventTicketType.create({
+          event_id: event.id,
+          name: 'Ingresso',
+          description: null,
+          price_amount: 0,
+          currency: 'BRL',
+          total_quantity: null,
+          start_at: null,
+          end_at: null,
+          sort_order: 0,
+          status: 'active'
+        }, { transaction: t });
+      }
+
+      if (ticketType.total_quantity !== null && ticketType.total_quantity !== undefined) {
+        const activeCount = await EventTicket.count({
+          where: { event_id: event.id, ticket_type_id: ticketType.id, status: { [Op.in]: ['reserved', 'checked_in'] } },
+          transaction: t
+        });
+        if (activeCount >= ticketType.total_quantity) {
+          await t.rollback();
+          return res.status(409).json({ error: 'Sold out', message: 'Ingressos esgotados' });
+        }
+      }
+
+      const expiresAt = endDt;
+      const ticket = await EventTicket.create({
+        event_id: event.id,
+        user_id: userId,
+        ticket_type_id: ticketType.id,
+        status: 'reserved',
+        reserved_at: now,
+        expires_at: expiresAt,
+        price_amount: ticketType.price_amount,
+        currency: ticketType.currency,
+        metadata: { source: 'public_reserve' }
+      }, { transaction: t });
+
+      await t.commit();
+      const qr_token = buildEventTicketQrToken({
+        ticket_id: ticket.id_code,
+        event_id: event.id_code,
+        expires_at: ticket.expires_at
+      });
+      return res.status(201).json({
+        success: true,
+        data: {
+          ticket_id: ticket.id_code,
+          status: ticket.status,
+          expires_at: ticket.expires_at,
+          qr_token,
+          ticket_type: {
+            id: ticketType.id_code,
+            name: ticketType.name,
+            price_amount: ticketType.price_amount,
+            currency: ticketType.currency
+          }
+        }
+      });
+    } catch (err) {
+      await t.rollback();
+      if (err && err.name && String(err.name).includes('SequelizeUniqueConstraintError')) {
+        return res.status(409).json({ error: 'Conflict', message: 'Você já possui um ingresso ativo para este evento' });
+      }
+      throw err;
+    }
+  } catch (error) {
+    console.error('Reserve ticket error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.post('/:id/self-checkin', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const event = await Event.findOne({ where: { id_code: id, status: 'published' } });
+    if (!event) {
+      return res.status(404).json({ error: 'Not Found', message: 'Evento não encontrado' });
+    }
+
+    if (!event.auto_checkin && !event.requires_auto_checkin) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Self-checkin não habilitado para este evento',
+        auto_checkin: !!event.auto_checkin,
+        requires_auto_checkin: !!event.requires_auto_checkin
+      });
+    }
+
+    const userId = req.user.userId;
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Usuário não encontrado' });
+    }
+
+    const now = new Date();
+    const endDate = event.end_date || event.date;
+    const endDt = event.end_time ? new Date(`${endDate}T${event.end_time}`) : new Date(`${endDate}T23:59:59`);
+    if (now > endDt) {
+      return res.status(400).json({ error: 'Validation error', message: 'Evento encerrado' });
+    }
+
+    const ticket = await EventTicket.findOne({
+      where: {
+        event_id: event.id,
+        user_id: userId,
+        status: { [Op.in]: ['reserved', 'checked_in'] }
+      }
+    });
+
+    if (!ticket) {
+      return res.status(409).json({
+        error: 'Need ticket',
+        code: 'need_ticket',
+        message: 'Você precisa reservar um ingresso antes do check-in',
+        reserve_endpoint: `/api/public/v1/events/${id}/tickets/reserve`
+      });
+    }
+
+    if (ticket.status === 'checked_in') {
+      return res.json({
+        success: true,
+        data: {
+          checked_in: true,
+          already_checked_in: true,
+          ticket_id: ticket.id_code
+        }
+      });
+    }
+
+    if (ticket.expires_at && new Date(ticket.expires_at).getTime() < Date.now()) {
+      await ticket.update({ status: 'expired' });
+      return res.status(400).json({ error: 'Validation error', message: 'Ingresso expirado' });
+    }
+
+    const t = await sequelize.transaction();
+    try {
+      await ticket.update({ status: 'checked_in', checked_in_at: now }, { transaction: t });
+
+      const guest = await EventGuest.findOne({ where: { event_id: event.id, user_id: userId }, transaction: t, lock: t.LOCK.UPDATE });
+      if (!guest) {
+        await EventGuest.create({
+          event_id: event.id,
+          user_id: userId,
+          guest_name: user.name || 'Guest',
+          guest_email: user.email || null,
+          guest_phone: user.phone || null,
+          type: 'normal',
+          source: 'invited',
+          rsvp_confirmed: true,
+          rsvp_at: now,
+          invited_at: now,
+          invited_by_user_id: null,
+          check_in_at: now,
+          check_in_method: 'auto_checkin',
+          authorized_by_user_id: null
+        }, { transaction: t });
+      } else {
+        await guest.update({
+          rsvp_confirmed: true,
+          rsvp_at: guest.rsvp_at || now,
+          check_in_at: guest.check_in_at || now,
+          check_in_method: guest.check_in_method || 'auto_checkin'
+        }, { transaction: t });
+      }
+
+      await t.commit();
+      return res.json({
+        success: true,
+        data: {
+          checked_in: true,
+          ticket_id: ticket.id_code,
+          checked_in_at: now
+        }
+      });
+    } catch (err) {
+      await t.rollback();
+      throw err;
+    }
+  } catch (error) {
+    console.error('Self-checkin error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
 /**
  * @swagger
  * /api/public/v1/events/public/{slug}:
@@ -514,7 +873,7 @@ router.get('/public/:slug', async (req, res) => {
     const { slug } = req.params;
 
     const event = await Event.findOne({
-      where: { slug },
+      where: { slug, status: 'published' },
       include: [{
         model: EventQuestion,
         as: 'questions',
@@ -539,8 +898,10 @@ router.get('/public/:slug', async (req, res) => {
       public_url: event.public_url,
       gallery_url: event.gallery_url,
       place: event.place,
-      start_datetime: event.start_datetime,
-      end_datetime: event.end_datetime,
+      date: event.date,
+      start_time: event.start_time,
+      end_time: event.end_time,
+      ...buildStartEndDatetime(event),
       questions: (event.questions || []).map(q => ({
         id: q.id,
         text: q.question_text,

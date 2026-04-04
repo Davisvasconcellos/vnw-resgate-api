@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken'); // Import JWT for manual verification
 const { TokenBlocklist, User } = require('../models'); // Import Blocklist
 const { Op } = require('sequelize');
 const admin = require('../config/firebaseAdmin'); // Import Firebase Admin
+const { normalizeJamInstrumentSlotsPayload } = require('../utils/jamInstrumentSlots');
 
 // Middleware opcional para extrair usuário se token existir
 const optionalAuth = async (req, res, next) => {
@@ -1029,7 +1030,8 @@ router.post('/:id/approve',
 
         if (shouldUseCustomStructure) {
           // Lógica de Override (Custom Structure)
-          for (const s of instrument_slots) {
+          const normalized = normalizeJamInstrumentSlotsPayload(instrument_slots);
+          for (const s of normalized) {
             await EventJamSongInstrumentSlot.create({ 
               jam_song_id: newSong.id, 
               instrument: s.instrument, 

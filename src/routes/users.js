@@ -1,8 +1,9 @@
 const express = require('express');
 const { Op } = require('sequelize');
 const { body, validationResult } = require('express-validator');
-const { sequelize, User, Plan, Store, StoreUser, Order, FootballTeam } = require('../models');
+const { sequelize, User, Plan, Store, StoreUser, Order, FootballTeam, EventTicket, EventTicketType, Event } = require('../models');
 const { requireRole, authenticateToken } = require('../middlewares/auth');
+const { buildEventTicketQrToken } = require('../utils/eventTicketQr');
 
 const router = express.Router();
 
@@ -83,9 +84,90 @@ router.get('/teste', authenticateToken, requireRole('admin', 'manager'), async (
   }
 });
 
+router.get('/me/tickets', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
+    const offset = (page - 1) * limit;
+    const status = req.query.status ? String(req.query.status) : null;
+
+    const where = { user_id: userId };
+    if (status) where.status = status;
+
+    const { count, rows } = await EventTicket.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Event,
+          as: 'event',
+          attributes: ['id_code', 'name', 'slug', 'banner_url', 'date', 'start_time', 'end_time', 'public_url', 'place', 'status']
+        },
+        {
+          model: EventTicketType,
+          as: 'ticketType',
+          attributes: ['id_code', 'name', 'price_amount', 'currency']
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      offset,
+      limit
+    });
+
+    return res.json({
+      success: true,
+      data: rows.map(r => {
+        const j = r.toJSON();
+        const qr_token = buildEventTicketQrToken({
+          ticket_id: j.id_code,
+          event_id: j.event ? j.event.id_code : null,
+          expires_at: j.expires_at
+        });
+        return {
+          id: j.id_code,
+          id_code: j.id_code,
+          status: j.status,
+          reserved_at: j.reserved_at,
+          expires_at: j.expires_at,
+          checked_in_at: j.checked_in_at,
+          price_amount: j.price_amount,
+          currency: j.currency,
+          qr_token,
+          event: j.event ? {
+            id: j.event.id_code,
+            name: j.event.name,
+            slug: j.event.slug,
+            banner_url: j.event.banner_url,
+            date: j.event.date,
+            start_time: j.event.start_time,
+            end_time: j.event.end_time,
+            public_url: j.event.public_url,
+            place: j.event.place,
+            status: j.event.status
+          } : null,
+          ticket_type: j.ticketType ? {
+            id: j.ticketType.id_code,
+            name: j.ticketType.name,
+            price_amount: j.ticketType.price_amount,
+            currency: j.ticketType.currency
+          } : null
+        };
+      }),
+      meta: {
+        total: count,
+        page,
+        limit,
+        pages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('List my tickets error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
 
 
-// Lista usuários que fizeram pedidos em uma store específica
+
 router.get('/store-users/:storeId', authenticateToken, async (req, res) => {
   const { storeId } = req.params;
   const { page = 1, limit = 20 } = req.query;
