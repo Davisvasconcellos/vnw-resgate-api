@@ -29,7 +29,7 @@ const { TokenBlocklist } = require('./models');
 const { Op } = require('sequelize');
 const cron = require('node-cron');
 const { generatePendingTransactions } = require('./services/recurrenceService');
-const { autoCloseProjectSessionsByCutoff } = require('./services/projectTimesheetService');
+const { autoCloseProjectSessionsByCutoff, closeStaleRunningEntries } = require('./services/projectTimesheetService');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -226,6 +226,7 @@ if (!isTestEnv) {
   cron.schedule('*/15 * * * *', async () => {
     try {
       await autoCloseProjectSessionsByCutoff();
+      await closeStaleRunningEntries();
     } catch (error) {
       console.error('Project timesheet maintenance failed:', error);
     }

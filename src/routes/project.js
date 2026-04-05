@@ -1013,6 +1013,7 @@ router.post(
         status: 'running',
         start_at: now,
         end_at: null,
+        last_heartbeat_at: now,
         description: req.body.description || null
       });
 
@@ -1056,6 +1057,8 @@ router.post('/time-entries/:id_code/stop', requireStorePermission(['project:read
     await timeEntry.update({
       end_at: now,
       status: 'closed',
+      end_source: 'user',
+      end_reason: null,
       minutes,
       hourly_rate_snapshot: hourlyRate,
       overhead_multiplier_snapshot: effectiveMultiplier * projectOverhead,
@@ -1073,6 +1076,121 @@ router.post('/time-entries/:id_code/stop', requireStorePermission(['project:read
     });
   } catch (error) {
     console.error('Stop time entry error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.post('/time-entries/:id_code/heartbeat', requireStorePermission(['project:read', 'project:write']), async (req, res) => {
+  try {
+    const timeEntry = await ProjectTimeEntry.findOne({
+      where: { store_id: req.storeId, user_id: req.user.userId, id_code: req.params.id_code }
+    });
+    if (!timeEntry) return res.status(404).json({ error: 'Not Found', message: 'Apontamento não encontrado' });
+    if (timeEntry.status !== 'running') return res.status(400).json({ error: 'Validation error', message: 'Apontamento não está em andamento' });
+
+    const now = new Date();
+    await timeEntry.update({ last_heartbeat_at: now });
+
+    const start = new Date(timeEntry.start_at);
+    const minutes = Math.max(0, Math.round((now.getTime() - start.getTime()) / 60000));
+
+    return res.json({
+      success: true,
+      data: {
+        time_entry_id: timeEntry.id_code,
+        server_now: now.toISOString(),
+        start_at: timeEntry.start_at,
+        minutes_estimated: minutes
+      }
+    });
+  } catch (error) {
+    console.error('Heartbeat time entry error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+router.get('/me/today', requireStorePermission(['project:read', 'project:write']), async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+    const endOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+    const date = toDateOnly(now);
+
+    const [openSession, runningEntry, closedEntries] = await Promise.all([
+      ProjectSession.findOne({
+        where: { store_id: req.storeId, user_id: req.user.userId, check_out_at: null },
+        order: [['check_in_at', 'DESC']]
+      }),
+      ProjectTimeEntry.findOne({
+        where: { store_id: req.storeId, user_id: req.user.userId, status: 'running' },
+        order: [['start_at', 'DESC']]
+      }),
+      ProjectTimeEntry.findAll({
+        where: {
+          store_id: req.storeId,
+          user_id: req.user.userId,
+          status: 'closed',
+          start_at: { [Op.between]: [startOfDayUtc, endOfDayUtc] }
+        },
+        attributes: ['minutes', 'cost_amount_snapshot']
+      })
+    ]);
+
+    const confirmedMinutes = (closedEntries || []).reduce((acc, e) => acc + (Number(e.minutes) || 0), 0);
+    const confirmedAmount = Number((closedEntries || []).reduce((acc, e) => acc + (Number(e.cost_amount_snapshot) || 0), 0).toFixed(2));
+
+    let running = null;
+    let estimatedMinutes = 0;
+    let estimatedAmount = 0;
+    if (runningEntry) {
+      const startAt = new Date(runningEntry.start_at);
+      estimatedMinutes = Math.max(0, Math.round((now.getTime() - startAt.getTime()) / 60000));
+
+      const rate = await getEffectiveCostRate({
+        storeId: req.storeId,
+        userId: req.user.userId,
+        projectId: runningEntry.project_id || null,
+        at: startAt
+      });
+
+      const project = runningEntry.project_id ? await ProjectProject.findByPk(runningEntry.project_id) : null;
+      const projectOverhead = project ? Number(project.overhead_multiplier || 1) : 1;
+      const hourlyRate = rate.hourly_rate !== null ? Number(rate.hourly_rate) : null;
+      const overheadMultiplier = rate.overhead_multiplier !== null ? Number(rate.overhead_multiplier) : 1;
+      if (hourlyRate !== null) {
+        const hours = estimatedMinutes / 60;
+        estimatedAmount = Number((hours * hourlyRate * overheadMultiplier * projectOverhead).toFixed(2));
+      }
+
+      running = {
+        id: runningEntry.id_code,
+        id_code: runningEntry.id_code,
+        start_at: runningEntry.start_at,
+        minutes_estimated: estimatedMinutes,
+        server_now: now.toISOString()
+      };
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        date,
+        server_now: now.toISOString(),
+        session: openSession ? { id: openSession.id_code, id_code: openSession.id_code, check_in_at: openSession.check_in_at } : null,
+        running
+      },
+      meta: {
+        totals: {
+          confirmed_minutes: confirmedMinutes,
+          estimated_minutes: estimatedMinutes,
+          confirmed_amount: confirmedAmount,
+          estimated_amount: estimatedAmount,
+          predicted_amount: Number((confirmedAmount + estimatedAmount).toFixed(2))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get today status error:', error);
     return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
   }
 });

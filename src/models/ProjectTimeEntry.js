@@ -50,6 +50,18 @@ const ProjectTimeEntry = sequelize.define('ProjectTimeEntry', {
     type: DataTypes.DATE,
     allowNull: true
   },
+  last_heartbeat_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  end_source: {
+    type: DataTypes.ENUM('user', 'auto'),
+    allowNull: true
+  },
+  end_reason: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
   minutes: {
     type: DataTypes.INTEGER,
     allowNull: true
@@ -78,4 +90,3 @@ const ProjectTimeEntry = sequelize.define('ProjectTimeEntry', {
 });
 
 module.exports = ProjectTimeEntry;
-
