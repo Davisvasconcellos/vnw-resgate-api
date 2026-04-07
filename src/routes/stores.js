@@ -735,6 +735,60 @@ router.put('/:id_code', authenticateToken, requireRole(['admin', 'manager']), [
   }
 );
 
+router.patch('/:id_code/members/:member_id_code', authenticateToken, async (req, res) => {
+  try {
+    const { id_code, member_id_code } = req.params;
+    const { role } = req.body;
+
+    const store = await Store.findOne({ where: { id_code } });
+    if (!store) {
+      return res.status(404).json({ error: 'Not Found', message: 'Loja não encontrada' });
+    }
+
+    const highPrivilegeRoles = ['admin', 'master', 'masteradmin'];
+    const isOwner = store.owner_id && String(store.owner_id) === String(req.user.userId);
+    const isHighPrivilege = highPrivilegeRoles.includes(req.user.role);
+
+    if (!isHighPrivilege && !isOwner) {
+      const requesterMember = await StoreMember.findOne({
+        where: { store_id: store.id, user_id: req.user.userId, status: 'active' }
+      });
+
+      if (!requesterMember || requesterMember.role !== 'manager') {
+        return res.status(403).json({ error: 'Forbidden', message: 'Sem permissão para gerenciar membros desta loja' });
+      }
+    }
+
+    const member = await StoreMember.findOne({
+      where: { id_code: member_id_code, store_id: store.id }
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: 'Not Found', message: 'Membro não encontrado' });
+    }
+
+    if (store.owner_id && String(member.user_id) === String(store.owner_id)) {
+      return res.status(400).json({ error: 'Validation error', message: 'Não é possível alterar o cargo do proprietário da loja' });
+    }
+
+    if (role && ['manager', 'collaborator', 'viewer'].includes(role)) {
+      await member.update({ role });
+      
+      // Também seria útil atualizar o StoreUser legado se existir
+      const { StoreUser } = require('../models');
+      const storeUser = await StoreUser.findOne({ where: { user_id: member.user_id, store_id: store.id } });
+      if (storeUser) {
+        await storeUser.update({ role });
+      }
+    }
+
+    return res.json({ success: true, message: 'Membro atualizado com sucesso', data: member });
+  } catch (error) {
+    console.error('Update store member error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
 router.delete('/:id_code/members/:member_id_code', authenticateToken, async (req, res) => {
   try {
     const { id_code, member_id_code } = req.params;

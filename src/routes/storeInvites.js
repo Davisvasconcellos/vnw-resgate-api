@@ -329,13 +329,14 @@ router.get('/', [
     if (acceptedUserIds.length) {
       const members = await StoreMember.findAll({
         where: { store_id: req.storeDbId, user_id: { [Op.in]: acceptedUserIds } },
-        attributes: ['id_code', 'user_id', 'status']
+        attributes: ['id_code', 'user_id', 'status'],
+        include: [{ model: User, as: 'user', attributes: ['id_code', 'name', 'avatar_url'] }]
       });
 
       memberIdCodeByUserId = new Map(
         members
           .map(normalize)
-          .map((m) => [Number(m.user_id), { id_code: m.id_code, status: m.status }])
+          .map((m) => [Number(m.user_id), { id_code: m.id_code, status: m.status, user_id_code: m.user ? m.user.id_code : null, user_name: m.user ? m.user.name : null, avatar_url: m.user ? m.user.avatar_url : null }])
       );
     }
 
@@ -345,7 +346,9 @@ router.get('/', [
       return {
         ...inv,
         store_member_id_code: member ? member.id_code : null,
-        store_member_status: member ? member.status : null
+        store_member_status: member ? member.status : null,
+        user_id_code: member ? member.user_id_code : null,
+        user: member && member.user_id_code ? { id_code: member.user_id_code, name: member.user_name, avatar_url: member.avatar_url } : null
       };
     });
 

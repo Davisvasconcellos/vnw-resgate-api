@@ -50,6 +50,10 @@ const ProjectMember = sequelize.define('ProjectMember', {
   overhead_multiplier_override: {
     type: DataTypes.DECIMAL(5, 2),
     allowNull: true
+  },
+  timezone_override: {
+    type: DataTypes.STRING(100),
+    allowNull: true
   }
 }, {
   tableName: 'project_members',

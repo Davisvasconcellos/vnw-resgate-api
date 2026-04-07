@@ -312,6 +312,9 @@ router.get(
           id_code: mj.id_code,
           role,
           status: mj.status || null,
+          timezone_override: mj.timezone_override || null,
+          hourly_rate_override: mj.hourly_rate_override || null,
+          overhead_multiplier_override: mj.overhead_multiplier_override || null,
           permissions: {
             can_view: true,
             can_track_time: role !== 'viewer',
@@ -471,18 +474,28 @@ router.get('/projects/:id_code', requireStorePermission(['project:read', 'projec
       order: [['created_at', 'ASC']]
     });
 
+    const cleanObj = (obj, extra = []) => {
+      const j = (obj && typeof obj.toJSON === 'function') ? obj.toJSON() : obj;
+      const removals = ['id', 'project_id', 'user_id', 'created_by_user_id', 'store_id', ...extra];
+      removals.forEach(k => delete j[k]);
+      if (j.id_code) j.id = j.id_code;
+      return j;
+    };
+
     return res.json({
       success: true,
       data: {
-        project: { ...project.toJSON(), id: project.id_code },
-        stages: stages.map(s => ({ ...s.toJSON(), id: s.id_code })),
+        project: cleanObj(project),
+        stages: stages.map(s => cleanObj(s)),
         members: members.map(m => {
-          const j = m.toJSON();
-          return {
-            ...j,
-            id: j.id_code,
-            user: j.user ? { ...j.user, id: j.user.id_code } : null
-          };
+          const mj = cleanObj(m);
+          if (mj.user) {
+            const uj = (mj.user && typeof mj.user.toJSON === 'function') ? mj.user.toJSON() : mj.user;
+            delete uj.id;
+            uj.id = uj.id_code;
+            mj.user = uj;
+          }
+          return mj;
         })
       }
     });
@@ -618,26 +631,58 @@ router.post(
       }
 
       const existing = await ProjectMember.findOne({ where: { project_id: project.id, user_id: user.id } });
+      
+      const prepareResponse = (m) => {
+        const json = m.toJSON();
+        return {
+          id: json.id_code,
+          id_code: json.id_code,
+          role: json.role,
+          status: json.status,
+          start_date: json.start_date,
+          end_date: json.end_date,
+          hourly_rate_override: json.hourly_rate_override,
+          overhead_multiplier_override: json.overhead_multiplier_override,
+          timezone_override: json.timezone_override
+        };
+      };
+
       if (existing) {
-        await existing.update({
+        const updateData = {
           status: req.body.status || 'active',
           role: req.body.role || existing.role
-        });
-        const j = existing.toJSON();
-        return res.json({ success: true, data: { member: { ...j, id: j.id_code } } });
+        };
+        
+        if (req.body.hourly_rate_override !== undefined) {
+          updateData.hourly_rate_override = req.body.hourly_rate_override === null ? null : parseFloat(req.body.hourly_rate_override);
+        }
+        if (req.body.overhead_multiplier_override !== undefined) {
+          updateData.overhead_multiplier_override = req.body.overhead_multiplier_override === null ? null : parseFloat(req.body.overhead_multiplier_override);
+        }
+        if (req.body.timezone_override !== undefined) {
+          updateData.timezone_override = req.body.timezone_override;
+        }
+
+        await existing.update(updateData);
+        return res.json({ success: true, data: { member: prepareResponse(existing) } });
       }
 
-      const member = await ProjectMember.create({
+      const createData = {
         store_id: req.storeId,
         project_id: project.id,
         user_id: user.id,
         role: req.body.role || 'member',
         status: req.body.status || 'active',
-        start_date: toDateOnly(new Date())
-      });
+        start_date: toDateOnly(new Date()),
+        hourly_rate_override: req.body.hourly_rate_override !== undefined && req.body.hourly_rate_override !== null 
+          ? parseFloat(req.body.hourly_rate_override) : null,
+        overhead_multiplier_override: req.body.overhead_multiplier_override !== undefined && req.body.overhead_multiplier_override !== null 
+          ? parseFloat(req.body.overhead_multiplier_override) : null,
+        timezone_override: req.body.timezone_override || null
+      };
 
-      const j = member.toJSON();
-      return res.status(201).json({ success: true, data: { member: { ...j, id: j.id_code } } });
+      const member = await ProjectMember.create(createData);
+      return res.status(201).json({ success: true, data: { member: prepareResponse(member) } });
     } catch (error) {
       console.error('Add project member error:', error);
       if (error.name === 'SequelizeUniqueConstraintError') {
@@ -664,6 +709,29 @@ router.delete('/projects/:id_code/members/:member_id', requireStorePermission(['
   }
 });
 
+router.delete('/projects/:id_code', requireStorePermission(['project:write']), async (req, res) => {
+  try {
+    const project = await resolveProjectByIdCode(req.storeId, req.params.id_code);
+    if (!project) return res.status(404).json({ error: 'Not Found', message: 'Projeto não encontrado' });
+
+    const storeRole = await getStoreRole(req.storeDbId, req.user.userId);
+    const canDeleteAll = isHighPrivilege(req.user.role) || storeRole === 'admin' || storeRole === 'manager';
+
+    if (!canDeleteAll) {
+      const member = await ProjectMember.findOne({
+        where: { project_id: project.id, user_id: req.user.userId, status: 'active', role: 'manager' }
+      });
+      if (!member) return res.status(403).json({ error: 'Forbidden', message: 'Sem permissão para excluir este projeto' });
+    }
+
+    await project.destroy();
+    return res.json({ success: true, message: 'Projeto excluído com sucesso.' });
+  } catch (error) {
+    console.error('Delete project error:', error);
+    return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
 router.get(
   '/member-costs',
   requireStorePermission(['project:read', 'project:write']),
@@ -679,12 +747,20 @@ router.get(
         if (!user) return res.status(404).json({ error: 'Not Found', message: 'Usuário não encontrado' });
         where.user_id = user.id;
       }
-      const rows = await ProjectMemberCost.findAll({ where, order: [['user_id', 'ASC'], ['start_date', 'DESC']] });
+      const rows = await ProjectMemberCost.findAll({ 
+        where, 
+        include: [{ model: User, as: 'user', attributes: ['id', 'id_code'] }],
+        order: [['user_id', 'ASC'], ['start_date', 'DESC'], ['id', 'DESC']] 
+      });
       return res.json({
         success: true,
         data: rows.map(r => {
           const j = r.toJSON();
-          return { ...j, id: j.id_code };
+          return { 
+            ...j, 
+            id: j.id_code,
+            user_id: j.user ? j.user.id_code : j.user_id // Use id_code if available for frontend matching
+          };
         })
       });
     } catch (error) {
@@ -725,8 +801,18 @@ router.post(
         end_date: req.body.end_date ? toDateOnly(new Date(req.body.end_date)) : null
       });
 
+      const userWithIdCode = await User.findByPk(user.id, { attributes: ['id', 'id_code'] });
       const j = row.toJSON();
-      return res.status(201).json({ success: true, data: { member_cost: { ...j, id: j.id_code } } });
+      return res.status(201).json({ 
+        success: true, 
+        data: { 
+          member_cost: { 
+            ...j, 
+            id: j.id_code,
+            user_id: userWithIdCode ? userWithIdCode.id_code : j.user_id
+          } 
+        } 
+      });
     } catch (error) {
       console.error('Create member cost error:', error);
       return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
@@ -762,8 +848,19 @@ router.patch(
       if (Object.prototype.hasOwnProperty.call(req.body, 'end_date')) patch.end_date = req.body.end_date ? toDateOnly(new Date(req.body.end_date)) : null;
 
       await row.update(patch);
+
+      const userWithIdCode = await User.findByPk(row.user_id, { attributes: ['id', 'id_code'] });
       const j = row.toJSON();
-      return res.json({ success: true, data: { member_cost: { ...j, id: j.id_code } } });
+      return res.json({ 
+        success: true, 
+        data: { 
+          member_cost: { 
+            ...j, 
+            id: j.id_code,
+            user_id: userWithIdCode ? userWithIdCode.id_code : j.user_id
+          } 
+        } 
+      });
     } catch (error) {
       console.error('Patch member cost error:', error);
       return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
@@ -813,6 +910,64 @@ router.post(
       return res.status(201).json({ success: true, data: { stage: { ...j, id: j.id_code } } });
     } catch (error) {
       console.error('Create stage error:', error);
+      return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+    }
+  }
+);
+
+router.patch(
+  '/stages/:id_code',
+  requireStorePermission(['project:write']),
+  [
+    body('title').optional().isLength({ min: 2, max: 255 }).trim(),
+    body('acronym').optional({ nullable: true }).isString(),
+    body('contract_value').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('estimated_hours').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('start_date').optional({ nullable: true }).isISO8601(),
+    body('due_date').optional({ nullable: true }).isISO8601(),
+    body('status').optional({ nullable: true }).isIn(['planned', 'active', 'completed', 'canceled']),
+    body('color_1').optional({ nullable: true }).isString(),
+    body('color_2').optional({ nullable: true }).isString(),
+    body('order_index').optional({ nullable: true }).isInt().toInt()
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'Validation error', details: errors.array() });
+
+    try {
+      const stage = await ProjectStage.findOne({
+        where: { id_code: req.params.id_code }
+      });
+      if (!stage) return res.status(404).json({ error: 'Not Found', message: 'Etapa não encontrada' });
+
+      const project = await ProjectProject.findByPk(stage.project_id);
+      if (!project || project.store_id !== req.storeId) return res.status(404).json({ error: 'Not Found', message: 'Projeto não encontrado' });
+
+      const patch = {};
+      if (req.body.title !== undefined) patch.title = req.body.title;
+      if (req.body.acronym !== undefined) patch.acronym = req.body.acronym;
+      if (req.body.contract_value !== undefined) patch.contract_value = req.body.contract_value;
+      if (req.body.estimated_hours !== undefined) patch.estimated_hours = req.body.estimated_hours;
+      if (req.body.color_1 !== undefined) patch.color_1 = req.body.color_1;
+      if (req.body.color_2 !== undefined) patch.color_2 = req.body.color_2;
+      if (req.body.order_index !== undefined) patch.order_index = req.body.order_index;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'start_date')) patch.start_date = req.body.start_date ? toDateOnly(new Date(req.body.start_date)) : null;
+      if (Object.prototype.hasOwnProperty.call(req.body, 'due_date')) patch.due_date = req.body.due_date ? toDateOnly(new Date(req.body.due_date)) : null;
+      
+      if (req.body.status !== undefined) {
+        patch.status = req.body.status;
+        if (req.body.status === 'completed' && stage.status !== 'completed') {
+          patch.completed_at = new Date();
+        } else if (req.body.status !== 'completed') {
+          patch.completed_at = null;
+        }
+      }
+
+      await stage.update(patch);
+      const j = stage.toJSON();
+      return res.json({ success: true, data: { stage: { ...j, id: j.id_code } } });
+    } catch (error) {
+      console.error('Patch stage error:', error);
       return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
     }
   }
