@@ -403,6 +403,197 @@ router.get(
   }
 );
 
+router.get(
+  '/admin/dashboard',
+  requireStorePermission(['project:read', 'project:write']),
+  async (req, res) => {
+    try {
+      const storeRole = await getStoreRole(req.storeDbId, req.user.userId);
+      const isManager = isHighPrivilege(req.user.role) || storeRole === 'admin' || storeRole === 'manager';
+      
+      if (!isManager) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Acesso restrito a gestores' });
+      }
+
+      // 1. Params
+      const startDate = req.query.start_date || moment().subtract(30, 'days').format('YYYY-MM-DD');
+      const endDate = req.query.end_date || moment().format('YYYY-MM-DD');
+      const requestedProjectIds = req.query.project_ids ? String(req.query.project_ids).split(',').map(v => v.trim()).filter(Boolean) : [];
+
+      const store = await Store.findOne({ where: { id: req.storeDbId }, attributes: ['timezone'] });
+      const storeTz = store ? store.timezone : 'America/Sao_Paulo';
+
+      // 2. Base Query Filters
+      const projectWhere = { store_id: req.storeId };
+      if (requestedProjectIds.length) {
+        projectWhere.id_code = { [Op.in]: requestedProjectIds };
+      }
+
+      // Helper to aggregate data for a range
+      const getDataForRange = async (start, end) => {
+        const startTs = moment.tz(start, storeTz).startOf('day').toDate();
+        const endTs = moment.tz(end, storeTz).endOf('day').toDate();
+
+        // Projects in scope
+        const scopeProjects = await ProjectProject.findAll({
+          where: projectWhere,
+          include: [{ model: ProjectStage, as: 'stages', attributes: ['id', 'id_code', 'contract_value'] }],
+          attributes: ['id', 'id_code', 'title', 'contract_value']
+        });
+        const scopeProjectIds = scopeProjects.map(p => p.id);
+        const scopeProjectIdCodes = scopeProjects.map(p => p.id_code);
+
+        // Time entries in range for THESE projects
+        const entriesWhere = {
+          store_id: req.storeId,
+          start_at: { [Op.between]: [startTs, endTs] },
+          status: { [Op.in]: ['closed', 'running'] }
+        };
+        if (scopeProjectIds.length) {
+          entriesWhere.project_id = { [Op.in]: scopeProjectIds };
+        }
+
+        const entries = await ProjectTimeEntry.findAll({ where: entriesWhere });
+
+        let totalMins = 0;
+        let totalCost = 0;
+        const projectBreakdownMap = new Map(); // projectId -> { mins, cost }
+        const memberBreakdownMap = new Map(); // userId -> { mins, cost }
+
+        for (const e of entries) {
+          const mins = Number(e.minutes || 0);
+          const cost = Number(e.cost_amount_snapshot || 0);
+          totalMins += mins;
+          totalCost += cost;
+
+          if (e.project_id) {
+            const pEntry = projectBreakdownMap.get(e.project_id) || { mins: 0, cost: 0 };
+            pEntry.mins += mins;
+            pEntry.cost += cost;
+            projectBreakdownMap.set(e.project_id, pEntry);
+          }
+
+          if (e.user_id) {
+            const mEntry = memberBreakdownMap.get(e.user_id) || { mins: 0, cost: 0 };
+            mEntry.mins += mins;
+            mEntry.cost += cost;
+            memberBreakdownMap.set(e.user_id, mEntry);
+          }
+        }
+
+        // Total Contract Value of scope (fixed value)
+        const totalContract = scopeProjects.reduce((acc, p) => acc + Number(p.contract_value || 0), 0);
+        
+        return {
+          totalMins,
+          totalCost,
+          totalContract,
+          projectBreakdownMap,
+          memberBreakdownMap,
+          projectCount: scopeProjects.length,
+          memberCount: memberBreakdownMap.size,
+          entries,
+          projects: scopeProjects
+        };
+      };
+
+      // 3. Compute Current and Previous Periods
+      const currentData = await getDataForRange(startDate, endDate);
+      
+      const diffDays = moment(endDate).diff(moment(startDate), 'days') + 1;
+      const prevStart = moment(startDate).subtract(diffDays, 'days').format('YYYY-MM-DD');
+      const prevEnd = moment(startDate).subtract(1, 'days').format('YYYY-MM-DD');
+      const prevData = await getDataForRange(prevStart, prevEnd);
+
+      const safePct = (curr, prev) => prev === 0 ? (curr > 0 ? 100 : 0) : Math.round(((curr - prev) / prev) * 100);
+
+      // 4. Build Timeseries (Daily)
+      const timeseries = [];
+      let iter = moment(startDate);
+      const endIter = moment(endDate);
+      while (iter <= endIter) {
+        const dStr = iter.format('YYYY-MM-DD');
+        const dayEntries = currentData.entries.filter(e => moment(e.start_at).tz(storeTz).format('YYYY-MM-DD') === dStr);
+        const dayMins = dayEntries.reduce((acc, e) => acc + Number(e.minutes || 0), 0);
+        const dayCost = dayEntries.reduce((acc, e) => acc + Number(e.cost_amount_snapshot || 0), 0);
+        
+        timeseries.push({
+          date: dStr,
+          minutes: dayMins,
+          cost: dayCost,
+          cost_actual: dayCost, // for chart alignment with finance model
+          cost_planned: 0 // Placeholder if we had budget per day
+        });
+        iter.add(1, 'day');
+      }
+
+      // 5. Breakdowns (Top Projects & Members)
+      const topProjects = currentData.projects.map(p => {
+        const stats = currentData.projectBreakdownMap.get(p.id) || { mins: 0, cost: 0 };
+        return {
+          id_code: p.id_code,
+          name: p.title,
+          contract_value: Number(p.contract_value || 0),
+          burn_minutes: stats.mins,
+          burn_cost: stats.cost,
+          margin_pct: p.contract_value > 0 ? Math.round(((Number(p.contract_value) - stats.cost) / Number(p.contract_value)) * 100) : 0
+        };
+      }).sort((a, b) => b.burn_cost - a.burn_cost).slice(0, 10);
+
+      const userIds = Array.from(currentData.memberBreakdownMap.keys());
+      const users = await User.findAll({ where: { id: { [Op.in]: userIds } }, attributes: ['id', 'id_code', 'name', 'avatar_url'] });
+      const topMembers = users.map(u => {
+        const stats = currentData.memberBreakdownMap.get(u.id) || { mins: 0, cost: 0 };
+        return {
+          id_code: u.id_code,
+          name: u.name,
+          avatar_url: u.avatar_url,
+          minutes: stats.mins,
+          cost: stats.cost
+        };
+      }).sort((a, b) => b.cost - a.cost);
+
+      return res.json({
+        success: true,
+        data: {
+          scope: {
+            start_date: startDate,
+            end_date: endDate,
+            project_ids: requestedProjectIds
+          },
+          kpis: {
+            total_contract: currentData.totalContract,
+            total_burn_cost: currentData.totalCost,
+            total_burn_minutes: currentData.totalMins,
+            active_projects: currentData.projectCount,
+            active_members: currentData.memberCount,
+            margin_value: currentData.totalContract - currentData.totalCost
+          },
+          compare_to_previous: {
+            delta: {
+              total_contract: currentData.totalContract - prevData.totalContract,
+              total_burn_cost: currentData.totalCost - prevData.totalCost,
+              margin_value: (currentData.totalContract - currentData.totalCost) - (prevData.totalContract - prevData.totalCost)
+            },
+            delta_pct: {
+              total_contract: safePct(currentData.totalContract, prevData.totalContract),
+              total_burn_cost: safePct(currentData.totalCost, prevData.totalCost),
+              margin_value: safePct(currentData.totalContract - currentData.totalCost, prevData.totalContract - prevData.totalCost)
+            }
+          },
+          timeseries,
+          top_projects: topProjects,
+          top_members: topMembers
+        }
+      });
+
+    } catch (error) {
+      console.error('Admin dashboard report error:', error);
+      return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+    }
+  }
+);
+
 router.post(
   '/projects',
   requireStorePermission(['project:write']),
