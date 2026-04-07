@@ -1590,7 +1590,7 @@ router.get(
           start_at: { [Op.between]: [startOfDayUtc, endOfDayUtc] }
         },
         include: [
-          { model: ProjectProject, as: 'project', attributes: ['id', 'id_code', 'title', 'name'] },
+          { model: ProjectProject, as: 'project', attributes: ['id', 'id_code', 'title'] },
           { model: ProjectStage, as: 'stage', attributes: ['id', 'id_code', 'title', 'color_1'] }
         ],
         order: [['start_at', 'ASC']]
@@ -1628,7 +1628,7 @@ router.get(
           if (!projectSummaryMap.has(entry.project_id)) {
             projectSummaryMap.set(entry.project_id, {
               id_code: entry.project ? entry.project.id_code : '',
-              name: entry.project ? (entry.project.title || entry.project.name) : 'Projeto',
+              name: entry.project ? entry.project.title : 'Projeto',
               minutes: 0
             });
           }
@@ -1639,7 +1639,7 @@ router.get(
             id_code: entry.id_code,
             project_id: entry.project_id,
             project_id_code: entry.project ? entry.project.id_code : null,
-            project_name: entry.project ? (entry.project.title || entry.project.name) : null,
+            project_name: entry.project ? entry.project.title : null,
             stage_id_code: entry.stage ? entry.stage.id_code : null,
             stage_title: entry.stage ? entry.stage.title : null,
             stage_color_1: entry.stage ? entry.stage.color_1 : null,
