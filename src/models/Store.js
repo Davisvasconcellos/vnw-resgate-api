@@ -57,6 +57,7 @@ const Store = sequelize.define('Store', {
   address_state: { type: DataTypes.STRING(255), allowNull: true },
   latitude: { type: DataTypes.DECIMAL(10, 8), allowNull: true },
   longitude: { type: DataTypes.DECIMAL(11, 8), allowNull: true },
+  timezone: { type: DataTypes.STRING(100), allowNull: false, defaultValue: 'America/Sao_Paulo' },
 
   // Media
   logo_url: { type: DataTypes.STRING(255), allowNull: true },

@@ -62,6 +62,16 @@ const ProjectProject = sequelize.define('ProjectProject', {
   created_by_user_id: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  burn_minutes: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0
+  },
+  burn_cost_total: {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: false,
+    defaultValue: 0
   }
 }, {
   tableName: 'project_projects',

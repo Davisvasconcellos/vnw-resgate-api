@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query, validationResult } = require('express-validator');
 const { Op } = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
+const moment = require('moment-timezone');
 const { authenticateToken, requireModule } = require('../middlewares/auth');
 const { requireStoreContext, requireStoreAccess } = require('../middlewares/storeContext');
 const { requireStorePermission } = require('../middlewares/storePermissions');
@@ -24,7 +25,7 @@ const {
 
 const router = express.Router();
 
-const toDateOnly = (d) => d.toISOString().slice(0, 10);
+const toDateOnly = (d, tz = 'UTC') => moment(d).tz(tz).format('YYYY-MM-DD');
 
 router.get('/me/scope', authenticateToken, requireModule('project'), async (req, res) => {
   try {
@@ -190,11 +191,16 @@ const requireProjectMember = async (projectId, userId) => {
 const getEffectiveCostRate = async ({ storeId, userId, projectId, at }) => {
   const date = toDateOnly(at);
 
+  const fetchStoreTz = async () => {
+    const s = await Store.findOne({ where: { id_code: storeId }, attributes: ['timezone'] });
+    return s ? s.timezone : 'America/Sao_Paulo';
+  };
+
   let memberOverride = null;
   if (projectId) {
     memberOverride = await ProjectMember.findOne({
       where: { project_id: projectId, user_id: userId, status: 'active' },
-      attributes: ['hourly_rate_override', 'overhead_multiplier_override'],
+      attributes: ['hourly_rate_override', 'overhead_multiplier_override', 'timezone_override'],
       raw: true
     });
   }
@@ -214,7 +220,7 @@ const getEffectiveCostRate = async ({ storeId, userId, projectId, at }) => {
       hourly_rate: memberOverride.hourly_rate_override,
       overhead_multiplier: memberOverride.overhead_multiplier_override !== null ? memberOverride.overhead_multiplier_override : 1,
       daily_auto_cutoff_time: cfg.daily_auto_cutoff_time || '18:00:00',
-      timezone: cfg.timezone || 'America/Sao_Paulo'
+      timezone: memberOverride.timezone_override || cfg.timezone || await fetchStoreTz()
     };
   }
 
@@ -228,14 +234,19 @@ const getEffectiveCostRate = async ({ storeId, userId, projectId, at }) => {
     order: [['start_date', 'DESC']]
   });
 
-  if (!cost) return { hourly_rate: null, overhead_multiplier: null, daily_auto_cutoff_time: '18:00:00', timezone: 'America/Sao_Paulo' };
+  if (!cost) return { 
+    hourly_rate: null, 
+    overhead_multiplier: null, 
+    daily_auto_cutoff_time: '18:00:00', 
+    timezone: await fetchStoreTz() 
+  };
 
   const j = cost.toJSON();
   return {
     hourly_rate: j.hourly_rate,
     overhead_multiplier: j.overhead_multiplier,
     daily_auto_cutoff_time: j.daily_auto_cutoff_time || '18:00:00',
-    timezone: j.timezone || 'America/Sao_Paulo'
+    timezone: j.timezone || await fetchStoreTz()
   };
 };
 
@@ -1087,16 +1098,21 @@ router.post('/sessions/check-out', requireStorePermission(['project:read', 'proj
   }
 });
 
-router.post(
-  '/time-entries/start',
-  requireStorePermission(['project:read', 'project:write']),
-  [
-    body('project_id').optional({ nullable: true }).isString(),
-    body('stage_id').optional({ nullable: true }).isString(),
-    body('task_id').optional({ nullable: true }).isString(),
-    body('description').optional({ nullable: true }).isString()
-  ],
-  async (req, res) => {
+router.post('/time-entries/start', requireStorePermission(['project:read', 'project:write']), [
+  body('project_id').optional({ nullable: true }).isString(),
+  body('stage_id').optional({ nullable: true }).isString(),
+  body('task_id').optional({ nullable: true }).isString(),
+  body('description').optional({ nullable: true }).isString()
+], startTimeEntryHandler);
+
+router.post('/time-entries/start-task', requireStorePermission(['project:read', 'project:write']), [
+  body('project_id').optional({ nullable: true }).isString(),
+  body('stage_id').optional({ nullable: true }).isString(),
+  body('task_id').optional({ nullable: true }).isString(),
+  body('description').optional({ nullable: true }).isString()
+], startTimeEntryHandler);
+
+async function startTimeEntryHandler(req, res) {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ error: 'Validation error', details: errors.array() });
 
@@ -1107,11 +1123,23 @@ router.post(
       });
       if (!session) return res.status(400).json({ error: 'Validation error', message: 'Check-in obrigatório' });
 
+      const isTask = !!(req.body.project_id || req.body.stage_id || req.body.task_id);
+
       const running = await ProjectTimeEntry.findOne({
-        where: { store_id: req.storeId, user_id: req.user.userId, status: 'running' }
+        where: { 
+          store_id: req.storeId, 
+          user_id: req.user.userId, 
+          status: 'running',
+          project_id: isTask ? { [Op.ne]: null } : null
+        }
       });
+
       if (running) {
-        return res.status(409).json({ error: 'Conflict', message: 'Já existe um apontamento em andamento', time_entry_id: running.id_code });
+        return res.status(409).json({ 
+          error: 'Conflict', 
+          message: `Já existe um apontamento de ${isTask ? 'tarefa' : 'expediente'} em andamento`,
+          time_entry_id: running.id_code 
+        });
       }
 
       let project = null;
@@ -1177,16 +1205,21 @@ router.post(
       console.error('Start time entry error:', error);
       return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
     }
-  }
-);
+}
 
-router.post('/time-entries/:id_code/stop', requireStorePermission(['project:read', 'project:write']), async (req, res) => {
+router.post('/time-entries/:id_code/stop', requireStorePermission(['project:read', 'project:write']), stopTimeEntryHandler);
+router.post('/time-entries/:id_code/stop-task', requireStorePermission(['project:read', 'project:write']), stopTimeEntryHandler);
+
+async function stopTimeEntryHandler(req, res) {
   try {
     const timeEntry = await ProjectTimeEntry.findOne({
       where: { store_id: req.storeId, user_id: req.user.userId, id_code: req.params.id_code }
     });
     if (!timeEntry) return res.status(404).json({ error: 'Not Found', message: 'Apontamento não encontrado' });
     if (timeEntry.status !== 'running') return res.status(400).json({ error: 'Validation error', message: 'Apontamento não está em andamento' });
+
+    const store = await Store.findOne({ where: { id_code: req.storeId } });
+    const storeTz = store ? store.timezone : 'America/Sao_Paulo';
 
     const now = new Date();
     const start = new Date(timeEntry.start_at);
@@ -1209,31 +1242,101 @@ router.post('/time-entries/:id_code/stop', requireStorePermission(['project:read
       ? Number((hours * hourlyRate * effectiveMultiplier * projectOverhead).toFixed(2))
       : null;
 
-    await timeEntry.update({
-      end_at: now,
-      status: 'closed',
-      end_source: 'user',
-      end_reason: null,
-      minutes,
-      hourly_rate_snapshot: hourlyRate,
-      overhead_multiplier_snapshot: effectiveMultiplier * projectOverhead,
-      cost_amount_snapshot: costAmount
+    await sequelize.transaction(async (t) => {
+      await timeEntry.update({
+        end_at: now,
+        status: 'closed',
+        end_source: 'user',
+        end_reason: null,
+        minutes,
+        hourly_rate_snapshot: hourlyRate,
+        overhead_multiplier_snapshot: effectiveMultiplier * projectOverhead,
+        cost_amount_snapshot: costAmount
+      }, { transaction: t });
+
+      if (timeEntry.stage_id) {
+        await ProjectStage.increment(
+          { total_minutes: minutes, total_amount: costAmount || 0 },
+          { where: { id: timeEntry.stage_id }, transaction: t }
+        );
+      }
+      if (timeEntry.project_id) {
+        await ProjectProject.increment(
+          { burn_minutes: minutes, burn_cost_total: costAmount || 0 },
+          { where: { id: timeEntry.project_id }, transaction: t }
+        );
+      }
     });
+
+    const updatedStage = timeEntry.stage_id ? await ProjectStage.findOne({ where: { id: timeEntry.stage_id } }) : null;
+    const updatedProject = timeEntry.project_id ? await ProjectProject.findByPk(timeEntry.project_id) : null;
+
+    const results = [];
+    results.push({
+      time_entry_id: timeEntry.id_code,
+      status: 'closed',
+      minutes,
+      cost_amount_snapshot: costAmount,
+      stage: updatedStage ? { id_code: updatedStage.id_code, total_minutes: updatedStage.total_minutes, total_amount: updatedStage.total_amount } : null,
+      project: updatedProject ? { id_code: updatedProject.id_code, burn_minutes: updatedProject.burn_minutes, burn_cost_total: updatedProject.burn_cost_total } : null
+    });
+
+    // Requirement: If stopping GENERAL, stop any running TASK too
+    const isGeneral = !timeEntry.project_id;
+    if (isGeneral) {
+      const runningTask = await ProjectTimeEntry.findOne({
+        where: { store_id: req.storeId, user_id: req.user.userId, status: 'running', project_id: { [Op.ne]: null } }
+      });
+      if (runningTask) {
+        // Logic similar to stop but simplified or we could reuse the same function
+        // For simplicity and to satisfy the "single request" feel, we'll stop it here
+        const taskNow = new Date();
+        const taskStart = new Date(runningTask.start_at);
+        const taskMin = Math.max(0, Math.round((taskNow.getTime() - taskStart.getTime()) / 60000));
+        const taskHours = taskMin / 60;
+        
+        const taskProj = await ProjectProject.findByPk(runningTask.project_id);
+        const taskRate = await getEffectiveCostRate({
+          storeId: req.storeId, userId: req.user.userId, projectId: runningTask.project_id, at: taskStart
+        });
+        
+        const tHourly = taskRate.hourly_rate !== null ? Number(taskRate.hourly_rate) : null;
+        const tOverhead = taskRate.overhead_multiplier !== null ? Number(taskRate.overhead_multiplier) : 1;
+        const pOverhead = taskProj ? Number(taskProj.overhead_multiplier) : 1;
+        const tCost = tHourly !== null ? Number((taskHours * tHourly * tOverhead * pOverhead).toFixed(2)) : null;
+
+        await sequelize.transaction(async (t) => {
+          await runningTask.update({
+            end_at: taskNow, status: 'closed', end_source: 'auto', minutes: taskMin,
+            hourly_rate_snapshot: tHourly, overhead_multiplier_snapshot: tOverhead * pOverhead, cost_amount_snapshot: tCost
+          }, { transaction: t });
+          
+          if (runningTask.stage_id) {
+            await ProjectStage.increment({ total_minutes: taskMin, total_amount: tCost || 0 }, { where: { id: runningTask.stage_id }, transaction: t });
+          }
+          if (runningTask.project_id) {
+            await ProjectProject.increment({ burn_minutes: taskMin, burn_cost_total: tCost || 0 }, { where: { id: runningTask.project_id }, transaction: t });
+          }
+        });
+        
+        results.push({
+          time_entry_id: runningTask.id_code,
+          status: 'closed',
+          minutes: taskMin,
+          is_auto_stopped: true
+        });
+      }
+    }
 
     return res.json({
       success: true,
-      data: {
-        time_entry_id: timeEntry.id_code,
-        status: 'closed',
-        minutes,
-        cost_amount_snapshot: costAmount
-      }
+      data: isGeneral ? results : results[0]
     });
   } catch (error) {
     console.error('Stop time entry error:', error);
     return res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
   }
-});
+}
 
 router.post('/time-entries/:id_code/heartbeat', requireStorePermission(['project:read', 'project:write']), async (req, res) => {
   try {
@@ -1248,6 +1351,47 @@ router.post('/time-entries/:id_code/heartbeat', requireStorePermission(['project
 
     const start = new Date(timeEntry.start_at);
     const minutes = Math.max(0, Math.round((now.getTime() - start.getTime()) / 60000));
+    const hours = minutes / 60;
+
+    let liveStage = null;
+    let liveProject = null;
+
+    if (timeEntry.stage_id || timeEntry.project_id) {
+      const rate = await getEffectiveCostRate({
+        storeId: req.storeId,
+        userId: req.user.userId,
+        projectId: timeEntry.project_id || null,
+        at: start
+      });
+
+      const projectRec = timeEntry.project_id ? await ProjectProject.findByPk(timeEntry.project_id) : null;
+      const projectOverhead = projectRec ? Number(projectRec.overhead_multiplier) : 1;
+      const hourlyRate = rate.hourly_rate !== null ? Number(rate.hourly_rate) : null;
+      const effectiveMultiplier = rate.overhead_multiplier !== null ? Number(rate.overhead_multiplier) : 1;
+      const liveCost = hourlyRate !== null
+        ? Number((hours * hourlyRate * effectiveMultiplier * projectOverhead).toFixed(2))
+        : 0;
+
+      if (timeEntry.stage_id) {
+        const stage = await ProjectStage.findByPk(timeEntry.stage_id);
+        if (stage) {
+          liveStage = {
+            id: stage.id_code,
+            id_code: stage.id_code,
+            total_minutes: Number(stage.total_minutes) + minutes,
+            total_amount: Number(stage.total_amount) + liveCost
+          };
+        }
+      }
+      if (timeEntry.project_id && projectRec) {
+        liveProject = {
+          id: projectRec.id_code,
+          id_code: projectRec.id_code,
+          burn_minutes: Number(projectRec.burn_minutes) + minutes,
+          burn_cost_total: Number(projectRec.burn_cost_total) + liveCost
+        };
+      }
+    }
 
     return res.json({
       success: true,
@@ -1255,7 +1399,9 @@ router.post('/time-entries/:id_code/heartbeat', requireStorePermission(['project
         time_entry_id: timeEntry.id_code,
         server_now: now.toISOString(),
         start_at: timeEntry.start_at,
-        minutes_estimated: minutes
+        minutes_estimated: minutes,
+        stage: liveStage,
+        project: liveProject
       }
     });
   } catch (error) {
@@ -1266,10 +1412,14 @@ router.post('/time-entries/:id_code/heartbeat', requireStorePermission(['project
 
 router.get('/me/today', requireStorePermission(['project:read', 'project:write']), async (req, res) => {
   try {
+    const store = await Store.findOne({ where: { id_code: req.storeId } });
+    const storeTz = store ? store.timezone : 'America/Sao_Paulo';
+
     const now = new Date();
-    const startOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
-    const endOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
-    const date = toDateOnly(now);
+    const nowLocal = moment().tz(storeTz);
+    const startOfDayUtc = nowLocal.clone().startOf('day').toDate();
+    const endOfDayUtc = nowLocal.clone().endOf('day').toDate();
+    const date = toDateOnly(now, storeTz);
 
     const [openSession, runningEntry, closedEntries] = await Promise.all([
       ProjectSession.findOne({
@@ -1291,39 +1441,48 @@ router.get('/me/today', requireStorePermission(['project:read', 'project:write']
       })
     ]);
 
-    const confirmedMinutes = (closedEntries || []).reduce((acc, e) => acc + (Number(e.minutes) || 0), 0);
+    const confirmedGeneralMinutes = (closedEntries || []).filter(e => !e.project_id).reduce((acc, e) => acc + (Number(e.minutes) || 0), 0);
+    const confirmedTaskMinutes = (closedEntries || []).filter(e => !!e.project_id).reduce((acc, e) => acc + (Number(e.minutes) || 0), 0);
     const confirmedAmount = Number((closedEntries || []).reduce((acc, e) => acc + (Number(e.cost_amount_snapshot) || 0), 0).toFixed(2));
 
-    let running = null;
-    let estimatedMinutes = 0;
-    let estimatedAmount = 0;
-    if (runningEntry) {
-      const startAt = new Date(runningEntry.start_at);
-      estimatedMinutes = Math.max(0, Math.round((now.getTime() - startAt.getTime()) / 60000));
+    let runningGeneral = null;
+    let runningTask = null;
+
+    // We can have both running in parallel now
+    const activeEntries = await ProjectTimeEntry.findAll({
+      where: { store_id: req.storeId, user_id: req.user.userId, status: 'running' },
+      include: [{ model: ProjectProject, as: 'project' }, { model: ProjectStage, as: 'stage' }]
+    });
+
+    for (const entry of activeEntries) {
+      const startAt = new Date(entry.start_at);
+      const estMin = Math.max(0, Math.round((now.getTime() - startAt.getTime()) / 60000));
+      const isTask = !!entry.project_id;
 
       const rate = await getEffectiveCostRate({
-        storeId: req.storeId,
-        userId: req.user.userId,
-        projectId: runningEntry.project_id || null,
-        at: startAt
+        storeId: req.storeId, userId: req.user.userId, projectId: entry.project_id || null, at: startAt
       });
-
-      const project = runningEntry.project_id ? await ProjectProject.findByPk(runningEntry.project_id) : null;
-      const projectOverhead = project ? Number(project.overhead_multiplier || 1) : 1;
-      const hourlyRate = rate.hourly_rate !== null ? Number(rate.hourly_rate) : null;
-      const overheadMultiplier = rate.overhead_multiplier !== null ? Number(rate.overhead_multiplier) : 1;
-      if (hourlyRate !== null) {
-        const hours = estimatedMinutes / 60;
-        estimatedAmount = Number((hours * hourlyRate * overheadMultiplier * projectOverhead).toFixed(2));
+      const project = entry.project_id ? entry.project : null;
+      const pOverhead = project ? Number(project.overhead_multiplier || 1) : 1;
+      const hRate = rate.hourly_rate !== null ? Number(rate.hourly_rate) : null;
+      const oMult = rate.overhead_multiplier !== null ? Number(rate.overhead_multiplier) : 1;
+      let estAmount = 0;
+      if (hRate !== null) {
+        estAmount = Number(((estMin / 60) * hRate * oMult * pOverhead).toFixed(2));
       }
 
-      running = {
-        id: runningEntry.id_code,
-        id_code: runningEntry.id_code,
-        start_at: runningEntry.start_at,
-        minutes_estimated: estimatedMinutes,
-        server_now: now.toISOString()
+      const obj = {
+        id: entry.id_code,
+        id_code: entry.id_code,
+        start_at: entry.start_at,
+        minutes_estimated: estMin,
+        amount_estimated: estAmount,
+        project: entry.project ? { id_code: entry.project.id_code, name: entry.project.name } : null,
+        stage: entry.stage ? { id_code: entry.stage.id_code, title: entry.stage.title } : null
       };
+
+      if (isTask) runningTask = obj;
+      else runningGeneral = obj;
     }
 
     return res.json({
@@ -1331,16 +1490,17 @@ router.get('/me/today', requireStorePermission(['project:read', 'project:write']
       data: {
         date,
         server_now: now.toISOString(),
-        session: openSession ? { id: openSession.id_code, id_code: openSession.id_code, check_in_at: openSession.check_in_at } : null,
-        running
+        session: openSession ? { id_code: openSession.id_code, check_in_at: openSession.check_in_at } : null,
+        running_general: runningGeneral,
+        running_task: runningTask
       },
       meta: {
         totals: {
-          confirmed_minutes: confirmedMinutes,
-          estimated_minutes: estimatedMinutes,
+          confirmed_general_minutes: confirmedGeneralMinutes,
+          confirmed_task_minutes: confirmedTaskMinutes,
           confirmed_amount: confirmedAmount,
-          estimated_amount: estimatedAmount,
-          predicted_amount: Number((confirmedAmount + estimatedAmount).toFixed(2))
+          running_general_minutes: runningGeneral?.minutes_estimated || 0,
+          running_task_minutes: runningTask?.minutes_estimated || 0
         }
       }
     });
