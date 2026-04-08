@@ -366,8 +366,138 @@ router.post('/', authenticateToken, requireRole('admin'), [
   }
 });
 
-// Atualizar usuário (Admin)
+// ATENÇÃO: As rotas estáticas (/me) DEVEM vir antes das rotas dinâmicas (/:id)
+// caso contrário o Express vai casar '/me' com '/:id'
+
+/**
+ * @swagger
+ * /api/v1/users/me:
+ *   put:
+ *     summary: Atualizar os dados do próprio usuário logado
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               team_user:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Usuário atualizado com sucesso
+ *       400:
+ *         description: Dados inválidos
+ *       401:
+ *         description: Não autenticado
+ */
+router.put('/me', authenticateToken, [
+  body('name').optional().isLength({ min: 2, max: 255 }).trim().withMessage('O nome deve ter entre 2 e 255 caracteres.'),
+  body('phone').optional().isLength({ min: 10, max: 20 }).withMessage('O telefone deve ter entre 10 e 20 caracteres.'),
+  body('team_user').optional({ nullable: true }).isInt().withMessage('O ID do time deve ser um número inteiro.'),
+  body('avatar_url')
+    .optional({ nullable: true })
+    .customSanitizer(value => {
+      return value === '' ? null : value;
+    })
+    .isString().withMessage('O caminho do avatar deve ser uma string válida.'),
+  body('birth_date').optional({ nullable: true }).isISO8601().toDate().withMessage('Data de nascimento inválida.'),
+  body('address_street').optional({ nullable: true }).isString().trim(),
+  body('address_number').optional({ nullable: true }).isString().trim(),
+  body('address_complement').optional({ nullable: true }).isString().trim(),
+  body('address_neighborhood').optional({ nullable: true }).isString().trim(),
+  body('address_city').optional({ nullable: true }).isString().trim(),
+  body('address_state').optional({ nullable: true }).isString().isLength({ min: 2, max: 2 }),
+  body('address_zip_code').optional({ nullable: true }).isString().trim().isLength({ min: 8, max: 10 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation error', message: 'Dados inválidos', details: errors.array() });
+    }
+
+    const user = await User.findByPk(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found', message: 'Usuário não encontrado.' });
+    }
+
+    const allowedUpdates = [
+      'name', 'phone', 'team_user', 'avatar_url', 'birth_date',
+      'address_street', 'address_number', 'address_complement',
+      'address_neighborhood', 'address_city', 'address_state', 'address_zip_code'
+    ];
+
+    const updateData = {};
+    for (const key of allowedUpdates) {
+      if (req.body[key] !== undefined) {
+        updateData[key] = req.body[key];
+      }
+    }
+    await user.update(updateData);
+
+    await user.reload({
+      include: [
+        { model: Plan, as: 'plan', attributes: ['id', 'name', 'description', 'price'] },
+        { model: FootballTeam, as: 'team', attributes: ['name', 'short_name', 'abbreviation', 'shield'] }
+      ]
+    });
+
+    res.json({ success: true, message: 'Seu perfil foi atualizado com sucesso.', data: { user: user.toJSON() } });
+  } catch (error) {
+    console.error('Update self error:', error);
+    res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+// Atualização parcial do próprio usuário (PATCH) — focado em avatar/selfie
+router.patch('/me', authenticateToken, [
+  body('avatar_url')
+    .optional({ nullable: true })
+    .customSanitizer(value => (value === '' ? null : value))
+    .isString().withMessage('O caminho do avatar deve ser uma string válida.')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation error', message: 'Dados inválidos', details: errors.array() });
+    }
+
+    const user = await User.findByPk(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found', message: 'Usuário não encontrado.' });
+    }
+
+    const updateData = {};
+    if (req.body.avatar_url !== undefined) {
+      updateData.avatar_url = req.body.avatar_url;
+    }
+
+    await user.update(updateData);
+
+    await user.reload({
+      include: [
+        { model: Plan, as: 'plan', attributes: ['id', 'name', 'description', 'price'] },
+        { model: FootballTeam, as: 'team', attributes: ['name', 'short_name', 'abbreviation', 'shield'] }
+      ]
+    });
+
+    res.json({ success: true, message: 'Seu perfil foi atualizado com sucesso.', data: { user: user.toJSON() } });
+  } catch (error) {
+    console.error('Patch self error:', error);
+    res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
+  }
+});
+
+// Atualizar usuário (Admin) - rota dinâmica, deve vir DEPOIS das rotas estáticas
 router.put('/:id', authenticateToken, requireRole('admin', 'master', 'masteradmin'), [
+
   body('name').optional().isLength({ min: 2, max: 255 }).trim(),
   body('email').optional().isEmail().normalizeEmail(),
   body('role').optional().isIn(['admin', 'manager', 'waiter', 'customer']),
@@ -456,111 +586,7 @@ router.put('/:id', authenticateToken, requireRole('admin', 'master', 'masteradmi
   }
 });
 
-/**
- * @swagger
- * /api/v1/users/me:
- *   put:
- *     summary: Atualizar os dados do próprio usuário logado
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               phone:
- *                 type: string
- *               team_user:
- *                 type: integer
- *     responses:
- *       200:
- *         description: Usuário atualizado com sucesso
- *       400:
- *         description: Dados inválidos
- *       401:
- *         description: Não autenticado
- */
-router.put('/me', authenticateToken, [
-  body('name').optional().isLength({ min: 2, max: 255 }).trim().withMessage('O nome deve ter entre 2 e 255 caracteres.'),
-  body('phone').optional().isLength({ min: 10, max: 20 }).withMessage('O telefone deve ter entre 10 e 20 caracteres.'),
-  body('team_user').optional({ nullable: true }).isInt().withMessage('O ID do time deve ser um número inteiro.'),
-  body('avatar_url')
-    .optional({ nullable: true })
-    .customSanitizer(value => {
-      return value === '' ? null : value; // Converte string vazia para null
-    })
-    .isString().withMessage('O caminho do avatar deve ser uma string válida.'), // Alterado para isString
-  body('birth_date').optional({ nullable: true }).isISO8601().toDate().withMessage('Data de nascimento inválida.'),
-  body('address_street').optional({ nullable: true }).isString().trim(),
-  body('address_number').optional({ nullable: true }).isString().trim(),
-  body('address_complement').optional({ nullable: true }).isString().trim(),
-  body('address_neighborhood').optional({ nullable: true }).isString().trim(),
-  body('address_city').optional({ nullable: true }).isString().trim(),
-  body('address_state').optional({ nullable: true }).isString().isLength({ min: 2, max: 2 }),
-  body('address_zip_code').optional({ nullable: true }).isString().trim().isLength({ min: 8, max: 10 })
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ error: 'Validation error', message: 'Dados inválidos', details: errors.array() });
-    }
-
-    const user = await User.findByPk(req.user.userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found', message: 'Usuário não encontrado.' });
-    }
-
-    // Apenas campos permitidos são atualizados
-    const allowedUpdates = [
-      'name',
-      'phone',
-      'team_user',
-      'avatar_url',
-      'birth_date',
-      'address_street',
-      'address_number',
-      'address_complement',
-      'address_neighborhood',
-      'address_city',
-      'address_state',
-      'address_zip_code'
-    ];
-
-    const updateData = {};
-    for (const key of allowedUpdates) {
-      if (req.body[key] !== undefined) {
-        updateData[key] = req.body[key];
-      }
-    }
-    await user.update(updateData);
-
-    // Recarrega o usuário com as associações para retornar o objeto completo
-    await user.reload({
-      include: [
-        {
-          model: Plan,
-          as: 'plan',
-          attributes: ['id', 'name', 'description', 'price']
-        },
-        {
-          model: FootballTeam,
-          as: 'team',
-          attributes: ['name', 'short_name', 'abbreviation', 'shield']
-        }
-      ]
-    });
-
-    res.json({ success: true, message: 'Seu perfil foi atualizado com sucesso.', data: { user: user.toJSON() } });
-  } catch (error) {
-    console.error('Update self error:', error);
-    res.status(500).json({ error: 'Internal server error', message: 'Erro interno do servidor' });
-  }
-});
+// [MOVIDO PARA ANTES DO PUT /:id - veja acima]
 
 // Atualização parcial do próprio usuário (PATCH) — focado em avatar/selfie
 router.patch('/me', authenticateToken, [

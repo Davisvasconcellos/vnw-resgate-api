@@ -29,7 +29,7 @@ const router = express.Router();
  *       401:
  *         description: Não autenticado
  */
-router.get('/', authenticateToken, requireModule('pub'), async (req, res) => {
+router.get('/', authenticateToken, async (req, res) => {
   try {
     const teams = await FootballTeam.findAll({
       order: [['name', 'ASC']]
