@@ -2,11 +2,9 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const { Op } = require('sequelize');
-const { User, Plan, TokenBlocklist, FootballTeam, Organization, Store, StoreMember } = require('../models');
+const { User, Plan, TokenBlocklist } = require('../models');
 const { authenticateToken } = require('../middlewares/auth');
 const admin = require('../config/firebaseAdmin');
-
-
 
 const crypto = require('crypto');
 
@@ -67,33 +65,6 @@ router.post('/login', [
           model: Plan,
           as: 'plan',
           attributes: ['id', 'name', 'description', 'price']
-        },
-        {
-          model: FootballTeam,
-          as: 'team',
-          attributes: ['name', 'short_name', 'abbreviation', 'shield']
-        },
-        {
-          model: require('../models').SysModule,
-          as: 'modules',
-          attributes: ['id', 'id_code', 'name', 'slug', 'home_path', 'active'],
-          through: { attributes: [] }
-        },
-        {
-          model: Organization,
-          as: 'ownedOrganizations',
-          attributes: ['id_code', 'name', 'plan_tier', 'logo_url', 'banner_url'],
-          include: [{ model: Store, as: 'stores', attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'] }]
-        },
-        {
-          model: StoreMember,
-          as: 'storeMemberships',
-          include: [{
-            model: Store,
-            as: 'store',
-            attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'],
-            include: [{ model: Organization, as: 'organization', attributes: ['id_code', 'name', 'logo_url', 'banner_url'] }]
-          }]
         }
       ]
     });
@@ -189,27 +160,6 @@ router.post('/google', [
         model: Plan,
         as: 'plan',
         attributes: ['id', 'name', 'description', 'price']
-      },
-      {
-        model: FootballTeam,
-        as: 'team',
-        attributes: ['name', 'short_name', 'abbreviation', 'shield']
-      },
-      {
-        model: Organization,
-        as: 'ownedOrganizations',
-        attributes: ['id_code', 'name', 'plan_tier', 'logo_url', 'banner_url'],
-        include: [{ model: Store, as: 'stores', attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'] }]
-      },
-      {
-        model: StoreMember,
-        as: 'storeMemberships',
-        include: [{
-          model: Store,
-          as: 'store',
-          attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'],
-          include: [{ model: Organization, as: 'organization', attributes: ['id_code', 'name'] }]
-        }]
       }
     ];
 
@@ -235,7 +185,7 @@ router.post('/google', [
           name: name || (email ? email.split('@')[0] : 'Usuário Google'),
           email,
           password: randomPassword,
-          role: 'customer',
+          role: 'people',
           google_uid: sub,
           google_id: sub, // legado
           avatar_url: picture || null,
@@ -340,13 +290,13 @@ router.post('/register', [
       });
     }
 
-    // Criar usuário (padrão: customer)
+    // Criar usuário (padrão: people)
     const user = await User.create({
       name,
       email,
       phone,
       password,
-      role: 'customer'
+      role: 'people'
     });
 
     // Gerar token JWT
@@ -403,33 +353,6 @@ router.get('/me', authenticateToken, async (req, res) => {
           model: Plan,
           as: 'plan',
           attributes: ['id', 'name', 'description', 'price']
-        },
-        {
-          model: FootballTeam,
-          as: 'team',
-          attributes: ['name', 'short_name', 'abbreviation', 'shield']
-        },
-        {
-          model: require('../models').SysModule,
-          as: 'modules',
-          attributes: ['id', 'id_code', 'name', 'slug', 'home_path', 'active'],
-          through: { attributes: [] }
-        },
-        {
-          model: Organization,
-          as: 'ownedOrganizations',
-          attributes: ['id_code', 'name', 'plan_tier', 'logo_url', 'banner_url'],
-          include: [{ model: Store, as: 'stores', attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'] }]
-        },
-        {
-          model: StoreMember,
-          as: 'storeMemberships',
-          include: [{
-            model: Store,
-            as: 'store',
-            attributes: ['id_code', 'name', 'slug', 'logo_url', 'banner_url'],
-            include: [{ model: Organization, as: 'organization', attributes: ['id_code', 'name', 'logo_url', 'banner_url'] }]
-          }]
         }
       ]
     });

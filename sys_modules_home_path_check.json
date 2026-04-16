@@ -1,7 +1,0 @@
-[
-  {
-    "column_name": "home_path",
-    "data_type": "character varying",
-    "is_nullable": "YES"
-  }
-]

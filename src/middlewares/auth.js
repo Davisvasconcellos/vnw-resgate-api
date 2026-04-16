@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, TokenBlocklist, Store, StoreMember, SysModule } = require('../models');
+const { User, TokenBlocklist } = require('../models');
 
 // Cache em memória para blocklist de tokens (evita query ao banco a cada request)
 // TTL de 60 segundos: tempo máximo que um token invalidado pode ser considerado válido
@@ -45,7 +45,6 @@ const authenticateToken = async (req, res, next) => {
 
     // Verifica cache de usuário primeiro
     const cachedUser = userCache.get(decoded.userId);
-
 
     if (cachedUser && (Date.now() - cachedUser.timestamp < USER_CACHE_TTL_MS)) {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -101,7 +100,7 @@ const authenticateToken = async (req, res, next) => {
       timestamp: Date.now()
     });
 
-    // Limpeza automática do cache (opcional, Map.delete no lookup já resolve, mas evita vazamento se o user sumir)
+    // Limpeza automática do cache
     setTimeout(() => {
       const entry = userCache.get(decoded.userId);
       if (entry && Date.now() - entry.timestamp >= USER_CACHE_TTL_MS) {
@@ -128,8 +127,8 @@ const requireRole = (...roles) => {
       return res.status(401).json({ message: 'Não autenticado' });
     }
 
-    // Admin, Master e MasterAdmin têm todos os acessos
-    const highPrivilegeRoles = ['admin', 'master', 'masteradmin'];
+    // Admin e Master têm todos os acessos
+    const highPrivilegeRoles = ['admin', 'master'];
 
     if (
       highPrivilegeRoles.includes(req.user.role) ||
@@ -145,91 +144,7 @@ const requireRole = (...roles) => {
   };
 };
 
-// Middleware para verificar acesso a módulos
-const requireModule = (moduleSlug) => {
-  return async (req, res, next) => {
-    try {
-      if (!req.user) {
-        return res.status(401).json({ message: 'Não autenticado' });
-      }
-
-      // Master/Admin sempre acessa tudo
-      const highPrivilegeRoles = ['admin', 'master', 'masteradmin'];
-      if (highPrivilegeRoles.includes(req.user.role)) {
-        return next();
-      }
-
-      const headerStoreId = req.headers['x-store-id'] || req.headers['x-context-store-id'];
-      const storeId = headerStoreId || req.query.store_id || req.body.store_id || null;
-
-      if (storeId) {
-        const store = await Store.findOne({ where: { id_code: String(storeId) }, attributes: ['id'] });
-        if (store) {
-          const member = await StoreMember.findOne({
-            where: { store_id: store.id, user_id: req.user.userId, status: 'active' },
-            attributes: ['role', 'permissions']
-          });
-
-          if (member) {
-            if (member.role === 'manager') {
-              return next();
-            }
-
-            const memberPermissions = Array.isArray(member.permissions) ? member.permissions : [];
-            if (memberPermissions.includes(`${moduleSlug}:read`) || memberPermissions.includes(`${moduleSlug}:write`)) {
-              return next();
-            }
-          }
-        }
-      }
-      if (!storeId) {
-        const memberships = await StoreMember.findAll({
-          where: { user_id: req.user.userId, status: 'active' },
-          attributes: ['role', 'permissions'],
-          limit: 50
-        });
-
-        const hasModuleAccess = memberships.some((m) => {
-          if (m.role === 'manager') return true;
-          const memberPermissions = Array.isArray(m.permissions) ? m.permissions : [];
-          return memberPermissions.includes(`${moduleSlug}:read`) || memberPermissions.includes(`${moduleSlug}:write`);
-        });
-
-        if (hasModuleAccess) {
-          return next();
-        }
-      }
-
-      const user = await User.findByPk(req.user.userId, {
-        include: [
-          {
-            model: SysModule,
-            as: 'modules',
-            where: { slug: moduleSlug, active: true },
-            required: false
-          }
-        ]
-      });
-
-      if (user && user.modules && user.modules.length > 0) {
-        return next();
-      }
-
-      return res.status(403).json({ 
-        error: 'Forbidden',
-        message: `Acesso negado. Módulo '${moduleSlug}' não está disponível para seu usuário.`
-      });
-    } catch (error) {
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Erro ao verificar permissão de módulo:', error);
-      }
-      return res.status(500).json({ message: 'Erro interno de verificação de permissão' });
-    }
-  };
-};
-
 module.exports = {
   authenticateToken,
-  requireRole,
-  requireModule
+  requireRole
 };

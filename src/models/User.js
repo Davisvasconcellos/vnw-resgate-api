@@ -45,9 +45,9 @@ const User = sequelize.define('User', {
     }
   },
   role: {
-    type: DataTypes.ENUM('master', 'admin', 'manager', 'waiter', 'customer'),
+    type: DataTypes.ENUM('master', 'admin', 'manager', 'volunteer', 'people'),
     allowNull: false,
-    defaultValue: 'customer'
+    defaultValue: 'people'
   },
   google_id: {
     type: DataTypes.STRING,
@@ -105,14 +105,6 @@ const User = sequelize.define('User', {
     allowNull: false,
     defaultValue: 'active'
   },
-  team_user: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      references: {
-        model: 'football_teams',
-        key: 'id'
-      }
-    },
   plan_id: {
     type: DataTypes.INTEGER,
     allowNull: true,
@@ -155,7 +147,6 @@ const User = sequelize.define('User', {
         user.password_hash = await bcrypt.hash(user.password_hash, 12);
       }
     },
-    // Removido afterCreate para evitar update adicional e padronizar com Store (UUID v4)
   }
 });
 
@@ -176,9 +167,6 @@ User.addHook('beforeBulkUpdate', (options) => {
   }
 });
 
-// Relação com football_teams
-// A associação foi movida para src/models/index.js para evitar dependências circulares.
-
 // Instance methods
 User.prototype.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password_hash);
@@ -198,15 +186,6 @@ User.findByEmail = function(email) {
 
 User.findByRole = function(role) {
   return this.findAll({ where: { role } });
-};
-
-// Associações
-User.associate = (models) => {
-  User.belongsToMany(models.SysModule, {
-    foreignKey: 'user_id',
-    through: 'sys_user_modules',
-    as: 'modules'
-  });
 };
 
 module.exports = User;
