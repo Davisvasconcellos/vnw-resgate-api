@@ -32,6 +32,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const { uploadRouter } = require('./routes/upload');
 const filesRoutes = require('./routes/files');
+const pdfRoutes = require('./routes/pdf');
 
 // Import middleware
 const errorHandler = require('./middlewares/errorHandler');
@@ -136,6 +137,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/files', filesRoutes);
+app.use('/api/v1/pdf', pdfRoutes);
 
 // Upload routes
 app.use('/api/v1/upload', uploadRouter);

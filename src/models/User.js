@@ -174,8 +174,9 @@ User.prototype.comparePassword = async function(candidatePassword) {
 
 User.prototype.toJSON = function() {
   const values = Object.assign({}, this.get());
+  delete values.id;            // Nunca expor o ID sequencial
   delete values.password_hash;
-  delete values.password; // Também remover o campo virtual
+  delete values.password;      // Também remover o campo virtual
   return values;
 };
 
