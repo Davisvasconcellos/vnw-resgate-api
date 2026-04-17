@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { sequelize, HelpRequest, User } = require('../models');
 const { authenticateToken } = require('../middlewares/auth');
+const { Op } = require('sequelize');
 
 // Função auxiliar opcional para extrair token sem bloquear se não estiver logado
 const optionalAuth = (req, res, next) => {
@@ -37,7 +38,7 @@ router.post('/', extractUserIfExists, async (req, res) => {
     const data = req.body;
     
     if (req.user) {
-      data.user_id = req.user.id;
+      data.user_id = req.user.userId;
     }
 
     const request = await HelpRequest.create(data);
@@ -83,7 +84,7 @@ router.get('/', async (req, res) => {
       attributes.include.push([sequelize.literal(haversine), 'distance']);
       // Ordenar por mais próximo
       order = [[sequelize.literal('distance'), 'ASC']];
-      whereClause[sequelize.Op.and] = sequelize.where(sequelize.literal(haversine), '<=', parseFloat(radiusKm));
+      whereClause[Op.and] = sequelize.where(sequelize.literal(haversine), '<=', parseFloat(radiusKm));
     }
 
     const { rows, count } = await HelpRequest.findAndCountAll({
@@ -152,7 +153,7 @@ router.put('/:id_code/status', authenticateToken, async (req, res) => {
 
     // Se o status for attending, marca quem é o voluntário (se apropriado)
     if (status === 'attending' && req.user) {
-      request.accepted_by = req.user.id;
+      request.accepted_by = req.user.userId;
     }
 
     request.status = status || request.status;

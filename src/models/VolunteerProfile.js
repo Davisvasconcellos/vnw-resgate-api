@@ -18,16 +18,17 @@ const VolunteerProfile = sequelize.define('VolunteerProfile', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
-  offer_type: {
-    type: DataTypes.ENUM('transport', 'boat', 'volunteer'),
-    allowNull: false
+  offer_types: {
+    type: DataTypes.JSON, // ['transport', 'boat', 'volunteer']
+    allowNull: false,
+    defaultValue: []
   },
-  vehicle_type: {
-    type: DataTypes.STRING,
+  car_details: {
+    type: DataTypes.JSON, // { type, seats, region, offroad }
     allowNull: true
   },
-  seats_available: {
-    type: DataTypes.INTEGER,
+  boat_details: {
+    type: DataTypes.JSON, // { type, spots, region, vests }
     allowNull: true
   },
   region: {

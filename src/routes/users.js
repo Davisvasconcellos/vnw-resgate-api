@@ -532,7 +532,7 @@ router.delete('/:id', authenticateToken, requireRole('admin'), async (req, res) 
       });
     }
 
-    if (user.id === req.user.id) {
+    if (user.id === req.user.userId) {
       return res.status(400).json({
         error: 'Cannot delete self',
         message: 'Não é possível deletar sua própria conta'

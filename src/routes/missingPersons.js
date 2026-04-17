@@ -22,7 +22,7 @@ const extractUserIfExists = async (req, res, next) => {
 router.post('/', extractUserIfExists, async (req, res) => {
   try {
     const data = req.body;
-    if (req.user) data.user_id = req.user.id;
+    if (req.user) data.user_id = req.user.userId;
 
     const missing = await MissingPerson.create(data);
     

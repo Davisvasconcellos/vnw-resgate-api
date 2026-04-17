@@ -2,7 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const { Op } = require('sequelize');
-const { User, Plan, TokenBlocklist } = require('../models');
+const { User, Plan, TokenBlocklist, VolunteerProfile } = require('../models');
 const { authenticateToken } = require('../middlewares/auth');
 const admin = require('../config/firebaseAdmin');
 
@@ -353,6 +353,10 @@ router.get('/me', authenticateToken, async (req, res) => {
           model: Plan,
           as: 'plan',
           attributes: ['id', 'name', 'description', 'price']
+        },
+        {
+          model: VolunteerProfile,
+          as: 'volunteer_profile'
         }
       ]
     });

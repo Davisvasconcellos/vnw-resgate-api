@@ -160,7 +160,8 @@ if (!isTestEnv) {
     console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
     try {
       await testConnection();
-      console.log('Database connected!');
+      await sequelize.sync({ alter: true }); // Garante que as novas colunas existam
+      console.log('Database connected and synced!');
     } catch (error) {
       console.error('Unable to connect to the database:', error);
     }

@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { Shelter, ShelterEntry, ShelterVolunteer, User, sequelize } = require('../models');
 const { authenticateToken, requireRole } = require('../middlewares/auth');
+const { Op } = require('sequelize');
 
 /**
  * Helper para validar se usuario é dono do abrigo ou role master/admin
  */
 const isShelterManager = async (req, shelter) => {
   if (req.user.role === 'master' || req.user.role === 'admin') return true;
-  return shelter.user_id === req.user.id;
+  return shelter.user_id === req.user.userId;
 };
 
 // ==========================================
@@ -22,7 +23,7 @@ const isShelterManager = async (req, shelter) => {
 router.post('/', authenticateToken, requireRole(['master', 'admin', 'manager', 'shelter']), async (req, res) => {
   try {
     const data = req.body;
-    data.user_id = req.user.id;
+    data.user_id = req.user.userId;
     
     const shelter = await Shelter.create(data);
     
@@ -62,7 +63,7 @@ router.get('/', async (req, res) => {
       
       attributes.include.push([sequelize.literal(haversine), 'distance']);
       order = [[sequelize.literal('distance'), 'ASC']];
-      whereClause[sequelize.Op.and] = sequelize.where(sequelize.literal(haversine), '<=', parseFloat(radiusKm));
+      whereClause[Op.and] = sequelize.where(sequelize.literal(haversine), '<=', parseFloat(radiusKm));
     }
 
     const { rows, count } = await Shelter.findAndCountAll({

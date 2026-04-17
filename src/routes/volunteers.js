@@ -10,10 +10,10 @@ const { authenticateToken } = require('../middlewares/auth');
 router.post('/profile', authenticateToken, async (req, res) => {
   try {
     const data = req.body;
-    data.user_id = req.user.id; // Vincula ao usuário logado
+    data.user_id = req.user.userId; // Vincula ao usuário logado
     
     // Deleta se já existir (upsert simples)
-    await VolunteerProfile.destroy({ where: { user_id: req.user.id } });
+    await VolunteerProfile.destroy({ where: { user_id: req.user.userId } });
     
     const profile = await VolunteerProfile.create(data);
     
@@ -34,7 +34,7 @@ router.post('/profile', authenticateToken, async (req, res) => {
  */
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const profile = await VolunteerProfile.findOne({ where: { user_id: req.user.id } });
+    const profile = await VolunteerProfile.findOne({ where: { user_id: req.user.userId } });
     if (!profile) {
       return res.status(404).json({ success: false, message: 'Perfil não encontrado' });
     }
@@ -53,13 +53,13 @@ router.get('/tasks', authenticateToken, async (req, res) => {
   try {
     // 1. Help Requests assumidos por este voluntario
     const requests = await HelpRequest.findAll({
-      where: { accepted_by: req.user.id },
+      where: { accepted_by: req.user.userId },
       order: [['updated_at', 'DESC']]
     });
 
     // 2. Abrigos onde atua ou foi convidado
     const shelterLinks = await ShelterVolunteer.findAll({
-      where: { user_id: req.user.id }
+      where: { user_id: req.user.userId }
     });
 
     // Buscar os data dos abrigos vinculados manualmente ou usando includes
@@ -104,7 +104,7 @@ router.put('/invites/:shelter_id_code', authenticateToken, async (req, res) => {
     if (!shelter) return res.status(404).json({ success: false, message: 'Abrigo não encontrado' });
 
     const link = await ShelterVolunteer.findOne({
-      where: { shelter_id: shelter.id, user_id: req.user.id }
+      where: { shelter_id: shelter.id, user_id: req.user.userId }
     });
 
     if (!link) return res.status(404).json({ success: false, message: 'Convite não encontrado' });
