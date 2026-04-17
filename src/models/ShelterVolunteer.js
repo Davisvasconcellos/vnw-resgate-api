@@ -16,8 +16,12 @@ const ShelterVolunteer = sequelize.define('ShelterVolunteer', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
+  help_request_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
   status: {
-    type: DataTypes.ENUM('pending', 'accepted'),
+    type: DataTypes.ENUM('pending', 'accepted', 'finished'),
     allowNull: false,
     defaultValue: 'pending'
   }

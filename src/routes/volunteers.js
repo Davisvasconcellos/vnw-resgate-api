@@ -51,38 +51,55 @@ router.get('/profile', authenticateToken, async (req, res) => {
  */
 router.get('/tasks', authenticateToken, async (req, res) => {
   try {
-    // 1. Help Requests assumidos por este voluntario
-    const requests = await HelpRequest.findAll({
-      where: { accepted_by: req.user.userId },
-      order: [['updated_at', 'DESC']]
+    // Buscar todos os vínculos e atribuições do voluntário
+    const assignments = await ShelterVolunteer.findAll({
+      where: { user_id: req.user.userId },
+      include: [
+        { 
+          model: HelpRequest, 
+          as: 'help_request',
+          include: [{ model: Shelter, as: 'shelter', attributes: ['id_code', 'name', 'address', 'phone'] }]
+        },
+        { 
+          model: Shelter, 
+          as: 'shelter', 
+          attributes: ['id_code', 'name', 'address', 'phone'] 
+        }
+      ],
+      order: [['created_at', 'DESC']]
     });
 
-    // 2. Abrigos onde atua ou foi convidado
-    const shelterLinks = await ShelterVolunteer.findAll({
-      where: { user_id: req.user.userId }
+    // Mapear para o formato que o frontend espera (unificando no array de help_requests para compatibilidade)
+    const formattedAssignments = assignments.map(a => {
+      const json = a.toJSON();
+      // Priorizar os dados do abrigo vindos do HelpRequest ou do vínculo direto
+      const shelter = json.help_request?.shelter || json.shelter;
+      
+      return {
+        id_code: json.help_request?.id_code || `assignment-${a.id}`,
+        type: 'volunteer',
+        status: json.status === 'accepted' ? 'ongoing' : json.status === 'finished' ? 'finished' : 'pending',
+        volunteer_message: json.help_request?.volunteer_message || 'Voluntariado Geral',
+        reporter_name: shelter?.name || 'Abrigo',
+        address: shelter?.address,
+        shelter_id: shelter?.id_code,
+        assignment_id: a.id // Para ações futuras
+      };
     });
 
-    // Buscar os data dos abrigos vinculados manualmente ou usando includes
-    let shelters = [];
-    if (shelterLinks.length > 0) {
-      const shelterIds = shelterLinks.map(s => s.shelter_id);
-      shelters = await Shelter.findAll({
-        where: { id: { [sequelize.Op.in]: shelterIds } }
-      });
-      // Merge status da pivot
-      shelters = shelters.map(shelter => {
-        const link = shelterLinks.find(s => s.shelter_id === shelter.id);
-        const json = shelter.toJSON();
-        json.volunteer_status = link.status;
-        return json;
-      });
-    }
+    // Manter retorno de help_requests legados (individuais) para tras
+    const legacyRequests = await HelpRequest.findAll({
+      where: { 
+        accepted_by: req.user.userId,
+        shelter_id: null // Apenas pedidos fora de abrigos (resgate, etc)
+      }
+    });
 
     return res.status(200).json({
       success: true,
       data: {
-        help_requests: requests,
-        shelters: shelters
+        help_requests: [...formattedAssignments, ...legacyRequests],
+        shelters: [] // Agora está unificado em help_requests
       }
     });
 
@@ -115,6 +132,31 @@ router.put('/invites/:shelter_id_code', authenticateToken, async (req, res) => {
     return res.status(200).json({ success: true, message: 'Status do convite atualizado' });
   } catch (error) {
     console.error('Error updating invite:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+  }
+});
+
+/**
+ * PUT /api/v1/volunteers/missions/:assignment_id/status
+ * Atualiza status de uma missão específica (ex: concluir)
+ */
+router.put('/missions/:assignment_id/status', authenticateToken, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const assignment = await ShelterVolunteer.findOne({
+      where: { id: req.params.assignment_id, user_id: req.user.userId }
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Missão não encontrada' });
+    }
+
+    assignment.status = status;
+    await assignment.save();
+
+    return res.status(200).json({ success: true, message: 'Missão atualizada!' });
+  } catch (error) {
+    console.error('Error updating mission:', error);
     return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
   }
 });

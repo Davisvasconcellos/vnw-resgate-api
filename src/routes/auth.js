@@ -2,7 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const { Op } = require('sequelize');
-const { User, Plan, TokenBlocklist, VolunteerProfile } = require('../models');
+const { User, Plan, TokenBlocklist, VolunteerProfile, Shelter } = require('../models');
 const { authenticateToken } = require('../middlewares/auth');
 const admin = require('../config/firebaseAdmin');
 
@@ -357,6 +357,10 @@ router.get('/me', authenticateToken, async (req, res) => {
         {
           model: VolunteerProfile,
           as: 'volunteer_profile'
+        },
+        {
+          model: Shelter,
+          as: 'managed_shelters'
         }
       ]
     });
@@ -458,7 +462,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
       const decoded = jwt.decode(token);
       await TokenBlocklist.create({
         token,
-        expiresAt: new Date(decoded.exp * 1000)
+        expires_at: new Date(decoded.exp * 1000)
       });
     }
 

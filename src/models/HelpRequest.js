@@ -18,12 +18,16 @@ const HelpRequest = sequelize.define('HelpRequest', {
     type: DataTypes.INTEGER,
     allowNull: true
   },
+  shelter_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true
+  },
   accepted_by: {
     type: DataTypes.INTEGER,
     allowNull: true
   },
   type: {
-    type: DataTypes.ENUM('rescue', 'shelter', 'medical', 'food', 'transport', 'boat'),
+    type: DataTypes.ENUM('rescue', 'shelter', 'medical', 'food', 'transport', 'boat', 'volunteer'),
     allowNull: false
   },
   status: {
@@ -63,6 +67,23 @@ const HelpRequest = sequelize.define('HelpRequest', {
   },
   reporter_phone: {
     type: DataTypes.STRING,
+    allowNull: true
+  },
+  volunteer_message: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  total_slots: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1,
+    allowNull: false
+  },
+  dropoff_location: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  finished_at: {
+    type: DataTypes.DATE,
     allowNull: true
   }
 }, {

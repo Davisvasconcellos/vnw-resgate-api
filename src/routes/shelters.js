@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Shelter, ShelterEntry, ShelterVolunteer, User, sequelize } = require('../models');
+const { Shelter, ShelterEntry, ShelterVolunteer, HelpRequest, User, sequelize } = require('../models');
 const { authenticateToken, requireRole } = require('../middlewares/auth');
 const { Op } = require('sequelize');
 
@@ -20,12 +20,15 @@ const isShelterManager = async (req, shelter) => {
  * POST /api/v1/shelters
  * Cadastrar novo abrigo. (Exige admin ou master ou manager)
  */
-router.post('/', authenticateToken, requireRole(['master', 'admin', 'manager', 'shelter']), async (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
   try {
     const data = req.body;
     data.user_id = req.user.userId;
     
     const shelter = await Shelter.create(data);
+    
+    // Promove o usuário a gestor
+    await User.update({ role: 'manager' }, { where: { id: req.user.userId } });
     
     return res.status(201).json({
       success: true,
@@ -51,13 +54,18 @@ router.get('/', async (req, res) => {
     const whereClause = {};
 
     if (lat && lng) {
+      const latFloat = parseFloat(lat);
+      const lngFloat = parseFloat(lng);
+
       const haversine = `(
         6371 * acos(
-          cos(radians(${sequelize.escape(lat)}))
-          * cos(radians(lat))
-          * cos(radians(lng) - radians(${sequelize.escape(lng)}))
-          + sin(radians(${sequelize.escape(lat)}))
-          * sin(radians(lat))
+          LEAST(1, GREATEST(-1, 
+            cos(radians(${latFloat}))
+            * cos(radians("Shelter"."lat"))
+            * cos(radians("Shelter"."lng") - radians(${lngFloat}))
+            + sin(radians(${latFloat}))
+            * sin(radians("Shelter"."lat"))
+          ))
         )
       )`;
       
@@ -226,6 +234,159 @@ router.post('/:id_code/volunteers', authenticateToken, async (req, res) => {
     return res.status(201).json({ success: true, message: 'Convite enviado', data: invite });
   } catch (error) {
     console.error('Error managing volunteers:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+  }
+});
+
+/**
+ * POST /api/v1/shelters/:id_code/broadcast-needs
+ * Abrigo solicita voluntários (cria HelpRequests do tipo volunteer)
+ */
+router.post('/:id_code/broadcast-needs', authenticateToken, async (req, res) => {
+  try {
+    const shelter = await Shelter.findOne({ where: { id_code: req.params.id_code } });
+    if (!shelter) return res.status(404).json({ success: false, message: 'Abrigo não encontrado' });
+    
+    if (!(await isShelterManager(req, shelter))) {
+      return res.status(403).json({ success: false, message: 'Sem permissão' });
+    }
+
+    const { needs } = req.body; // Array de { label, count }
+    
+    const createdRequests = [];
+
+    for (const need of needs) {
+      if (need.count > 0) {
+        const hReq = await HelpRequest.create({
+          user_id: req.user.userId,
+          shelter_id: shelter.id,
+          type: 'volunteer',
+          status: 'pending',
+          urgency: 'medium',
+          people_count: 1, 
+          address: shelter.address,
+          lat: shelter.lat,
+          lng: shelter.lng,
+          reporter_name: shelter.name,
+          reporter_phone: shelter.phone,
+          volunteer_message: `NECESSIDADE DE VOLUNTÁRIOS: ${need.label}`,
+          total_slots: need.count
+        });
+        createdRequests.push(hReq);
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `${createdRequests.length} solicitações de voluntários publicadas com sucesso.`,
+      data: createdRequests
+    });
+  } catch (error) {
+    console.error('Error broadcasting shelter needs:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+  }
+});
+
+/**
+ * GET /api/v1/shelters/:id_code/broadcast-needs
+ * Listar solicitações de voluntários do abrigo (ativas/pendentes)
+ */
+router.get('/:id_code/broadcast-needs', authenticateToken, async (req, res) => {
+  try {
+    const shelter = await Shelter.findOne({ where: { id_code: req.params.id_code } });
+    if (!shelter) return res.status(404).json({ success: false, message: 'Abrigo não encontrado' });
+
+    const requests = await HelpRequest.findAll({
+      where: { 
+        [Op.or]: [
+          { shelter_id: shelter.id },
+          { shelter_id: null, user_id: shelter.user_id }
+        ],
+        type: 'volunteer'
+      },
+      include: [
+        { 
+          model: ShelterVolunteer, 
+          as: 'volunteers',
+          include: [{ model: User, as: 'user', attributes: ['id_code', 'name', 'phone'] }]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    // 1. Formatar Broadcasts (Solicitados)
+    const formattedRequests = requests.map(r => {
+      const plain = r.toJSON();
+      plain.accepted_count = plain.volunteers ? plain.volunteers.filter((v) => v.status === 'accepted').length : 0;
+      return plain;
+    });
+
+    // 2. Formatar Equipe (Agrupado por Usuário)
+    const allAssignments = await ShelterVolunteer.findAll({
+      where: { shelter_id: shelter.id },
+      include: [
+        { model: User, as: 'user', attributes: ['id_code', 'name', 'phone'] },
+        { model: HelpRequest, as: 'help_request', attributes: ['id_code', 'volunteer_message'] }
+      ]
+    });
+
+    const teamMap = {};
+    allAssignments.forEach(a => {
+      if (!a.user) return;
+      if (!teamMap[a.user.id_code]) {
+        teamMap[a.user.id_code] = {
+          id_code: a.user.id_code,
+          name: a.user.name,
+          phone: a.user.phone,
+          activities: []
+        };
+      }
+      teamMap[a.user.id_code].activities.push({
+        id: a.id,
+        label: a.help_request?.volunteer_message?.replace('NECESSIDADE DE VOLUNTÁRIOS: ', '') || 'Voluntariado Geral',
+        status: a.status
+      });
+    });
+
+    return res.status(200).json({ 
+      success: true, 
+      data: formattedRequests,
+      team: Object.values(teamMap)
+    });
+  } catch (error) {
+    console.error('Error fetching shelter needs:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+  }
+});
+
+/**
+ * DELETE /api/v1/shelters/:id_code/broadcast-needs/:request_id_code
+ * Cancelar uma solicitação de voluntário
+ */
+router.delete('/:id_code/broadcast-needs/:request_id_code', authenticateToken, async (req, res) => {
+  try {
+    const shelter = await Shelter.findOne({ where: { id_code: req.params.id_code } });
+    if (!shelter) return res.status(404).json({ success: false, message: 'Abrigo não encontrado' });
+    
+    if (!(await isShelterManager(req, shelter))) {
+      return res.status(403).json({ success: false, message: 'Sem permissão' });
+    }
+
+    const deleted = await HelpRequest.destroy({
+      where: { 
+        id_code: req.params.request_id_code,
+        [Op.or]: [
+          { shelter_id: shelter.id },
+          { shelter_id: null, user_id: shelter.user_id }
+        ]
+      }
+    });
+
+    if (!deleted) return res.status(404).json({ success: false, message: 'Solicitação não encontrada' });
+
+    return res.status(200).json({ success: true, message: 'Solicitação cancelada com sucesso' });
+  } catch (error) {
+    console.error('Error deleting shelter need:', error);
     return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
   }
 });
