@@ -45,9 +45,9 @@ const User = sequelize.define('User', {
     }
   },
   role: {
-    type: DataTypes.ENUM('master', 'admin', 'manager', 'volunteer', 'people'),
+    type: DataTypes.ENUM('master', 'admin', 'manager', 'volunteer', 'people', 'civilian', 'shelter', 'transport', 'boat'),
     allowNull: false,
-    defaultValue: 'people'
+    defaultValue: 'civilian'
   },
   google_id: {
     type: DataTypes.STRING,

@@ -33,6 +33,10 @@ const userRoutes = require('./routes/users');
 const { uploadRouter } = require('./routes/upload');
 const filesRoutes = require('./routes/files');
 const pdfRoutes = require('./routes/pdf');
+const helpRequestsRoutes = require('./routes/helpRequests');
+const missingPersonsRoutes = require('./routes/missingPersons');
+const sheltersRoutes = require('./routes/shelters');
+const volunteersRoutes = require('./routes/volunteers');
 
 // Import middleware
 const errorHandler = require('./middlewares/errorHandler');
@@ -138,6 +142,10 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/files', filesRoutes);
 app.use('/api/v1/pdf', pdfRoutes);
+app.use('/api/v1/requests', helpRequestsRoutes);
+app.use('/api/v1/missing', missingPersonsRoutes);
+app.use('/api/v1/shelters', sheltersRoutes);
+app.use('/api/v1/volunteers', volunteersRoutes);
 
 // Upload routes
 app.use('/api/v1/upload', uploadRouter);

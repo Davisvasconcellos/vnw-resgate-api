@@ -156,6 +156,41 @@ npm run dev
 | `POST` | `/:id_code/reset-password` | Resetar senha de um usuário | 🔒 Admin |
 | `DELETE` | `/:id` | Deletar usuário | 🔒 Admin |
 
+### Help Requests (Resgates & Pedidos de Ajuda) - `/api/v1/requests`
+| Método | Rota | Descrição | Auth |
+|--------|------|-----------|------|
+| `POST` | `/` | Criar um pedido de resgate (público ou logado) | ❌/🔒 |
+| `GET` | `/` | Buscar pedidos (Filtros: `type`, `status`, `lat`, `lng`, `radiusKm`) | ❌ |
+| `GET` | `/:id_code` | Obter detalhes do pedido | ❌ |
+| `PUT` | `/:id_code/status` | Voluntário assume/atualiza status do resgate | 🔒 Token |
+
+### Pessoas Desaparecidas - `/api/v1/missing`
+| Método | Rota | Descrição | Auth |
+|--------|------|-----------|------|
+| `POST` | `/` | Registrar uma pessoa desaparecida | ❌/🔒 |
+| `GET` | `/` | Busca paginada (Filtros: `name`, `status`) | ❌ |
+| `GET` | `/:id_code` | Detalhe do desaparecido | ❌ |
+| `PUT` | `/:id_code/status` | Marcar como encontrado | 🔒 Token |
+
+### Abrigos (Shelters & Lotação) - `/api/v1/shelters`
+| Método | Rota | Descrição | Auth |
+|--------|------|-----------|------|
+| `POST` | `/` | Cadastrar novo abrigo | 🔒 Admin/Manager |
+| `GET` | `/` | Busca paginada e por Geolocalização (Haversine) | ❌ |
+| `GET` | `/:id_code` | Detalhes físicos e capacidade do abrigo | ❌ |
+| `POST` | `/:id_code/entries` | Solicitação/Registro de entrada (Pessoa no abrigo) | ❌ |
+| `GET` | `/:id_code/entries` | Listagem das lotações/entradas | 🔒 Token |
+| `PUT` | `/:id_code/entries/:entry_id` | Altera status (`present` ou `left`) -> *Lotação autom. via Hook* | 🔒 Manager/Admin |
+| `POST` | `/:id_code/volunteers` | Abrigo envia convite de trabalho para voluntário | 🔒 Manager/Admin |
+
+### Voluntários - `/api/v1/volunteers`
+| Método | Rota | Descrição | Auth |
+|--------|------|-----------|------|
+| `POST` | `/profile` | Preenche o form de base (Onboarding logístico) | 🔒 Token |
+| `GET` | `/profile` | Busca os dados armazenados como voluntário do user logado | 🔒 Token |
+| `GET` | `/tasks` | Retorna abrigos com convite + atendimentos de resgate em andamento | 🔒 Token |
+| `PUT` | `/invites/:shelter_id_code` | Voluntário aceita (`accepted`) convite ao abrigo | 🔒 Token |
+
 ### Upload/Files
 | Método | Rota | Descrição | Auth |
 |--------|------|-----------|------|
