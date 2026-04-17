@@ -36,9 +36,32 @@ const extractUserIfExists = async (req, res, next) => {
 router.post('/', extractUserIfExists, async (req, res) => {
   try {
     const data = req.body;
+    const { device_id, type } = data;
+
+    // 1. Verificação de Flood (Duplicate Prevention)
+    if (device_id && type && !req.user) { // Libera múltiplos para usuários logados se quiserem, mas anônimo trava
+      const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000);
+      const existingRequest = await HelpRequest.findOne({
+        where: {
+          device_id,
+          type,
+          status: 'pending',
+          created_at: { [Op.gt]: twentyMinutesAgo }
+        }
+      });
+
+      if (existingRequest) {
+        return res.status(429).json({
+          success: false,
+          message: 'Você já tem uma solicitação deste tipo pendente. Por favor, aguarde o atendimento ou atualize a anterior.',
+          id_code: existingRequest.id_code
+        });
+      }
+    }
     
     if (req.user) {
       data.user_id = req.user.userId;
+      data.is_verified = true;
     }
 
     const request = await HelpRequest.create(data);
@@ -60,12 +83,16 @@ router.post('/', extractUserIfExists, async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const { type, status, lat, lng, radiusKm = 10, limit = 50, offset = 0 } = req.query;
+    const { type, status, lat, lng, radiusKm = 10, limit = 50, offset = 0, id_codes } = req.query;
     const whereClause = {};
 
     if (type) whereClause.type = type;
     
-    if (status) {
+    if (id_codes) {
+      const codes = id_codes.split(',');
+      whereClause.id_code = { [Op.in]: codes };
+      // Se busca IDs específicos, não filtramos status
+    } else if (status) {
       whereClause.status = status;
     } else {
       // Por padrão, oculta os já resolvidos para não poluir o mapa

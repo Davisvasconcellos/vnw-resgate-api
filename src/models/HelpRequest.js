@@ -85,6 +85,23 @@ const HelpRequest = sequelize.define('HelpRequest', {
   finished_at: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  device_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  is_verified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  description: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  sub_type: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
 }, {
   tableName: 'help_requests',

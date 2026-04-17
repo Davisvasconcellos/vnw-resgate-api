@@ -269,8 +269,8 @@ router.put('/me', authenticateToken, [
   body('address_complement').optional({ nullable: true }).isString().trim(),
   body('address_neighborhood').optional({ nullable: true }).isString().trim(),
   body('address_city').optional({ nullable: true }).isString().trim(),
-  body('address_state').optional({ nullable: true }).isString().isLength({ min: 2, max: 2 }),
-  body('address_zip_code').optional({ nullable: true }).isString().trim().isLength({ min: 8, max: 10 })
+  body('address_state').optional({ nullable: true }).isString(),
+  body('address_zip_code').optional({ nullable: true }).isString().trim()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -378,8 +378,8 @@ router.put('/:id', authenticateToken, requireRole('admin', 'master'), [
   body('address_complement').optional({ nullable: true }).isString().trim(),
   body('address_neighborhood').optional({ nullable: true }).isString().trim(),
   body('address_city').optional({ nullable: true }).isString().trim(),
-  body('address_state').optional({ nullable: true }).isString().isLength({ min: 2, max: 2 }),
-  body('address_zip_code').optional({ nullable: true }).isString().trim().isLength({ min: 8, max: 10 })
+  body('address_state').optional({ nullable: true }).isString(),
+  body('address_zip_code').optional({ nullable: true }).isString().trim()
 ], async (req, res) => {
   try {
     const { id } = req.params;
