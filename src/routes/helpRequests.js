@@ -238,11 +238,37 @@ router.put('/:id_code/status', authenticateToken, async (req, res) => {
 
     // Se estiver sendo finalizado (aceita 'resolved' ou 'completed')
     if (status === 'resolved' || status === 'completed') {
+      const { ShelterEntry, Shelter: ShelterModel } = require('../models');
+      
       request.finished_at = new Date();
       if (dropoff) {
         request.dropoff_location = dropoff;
       }
       request.status = 'resolved'; // Padroniza no banco
+
+      // Automação de Check-in no Abrigo (Somente para Rescue, Transport e Boat)
+      const { shelter_id } = req.body;
+      if (shelter_id && (request.type === 'rescue' || request.type === 'transport' || request.type === 'boat')) {
+        try {
+          // shelter_id vindo do front é o id_code (UUID)
+          const targetShelter = await ShelterModel.findOne({ where: { id_code: shelter_id } });
+          
+          if (targetShelter) {
+            await ShelterEntry.create({
+              shelter_id: targetShelter.id,
+              name: request.reporter_name || 'Resgatado (S/N)',
+              phone: request.reporter_phone,
+              people_count: request.people_count || 1,
+              status: 'present' // Isso ativa o hook afterCreate que incrementa 'occupied'
+            });
+            // Opcional: Vincular o pedido ao abrigo no banco se não estava
+            request.shelter_id = targetShelter.id;
+          }
+        } catch (e) {
+          console.error('Erro na automação de check-in:', e);
+          // Não bloqueia a finalização se o check-in falhar, mas logamos
+        }
+      }
     } else {
       request.status = status || request.status;
     }
