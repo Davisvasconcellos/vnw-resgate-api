@@ -378,7 +378,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: 'Nenhum arquivo enviado.' });
     }
 
-    const folder = req.body.folder || 'uploads'; // 'events', 'users', etc. (Currently unused in uploadFileToDrive logic, but good for future extension)
+    const folder = req.body.folder || 'uploads';
 
     // Upload para o Drive
     const result = await uploadFileToDrive(req.file, folder);
