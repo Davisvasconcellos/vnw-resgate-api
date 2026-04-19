@@ -7,6 +7,28 @@ const path = require('path');
 const fs = require('fs');
 
 // Configuração do Multer (Armazenamento em memória)
+/**
+ * @swagger
+ * /api/v1/uploads:
+ *   post:
+ *     summary: Fazer upload de arquivo para o Google Drive
+ *     tags: [Uploads]
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               folder:
+ *                 type: string
+ *                 description: Caminho da pasta no Drive (ex. pedidos/fotos)
+ *     responses:
+ *       200:
+ *         description: Arquivo enviado. Retorna a URL de proxy da API.
+ */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // Limite de 5MB

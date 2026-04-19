@@ -75,6 +75,40 @@ module.exports = {
         type: Sequelize.STRING(20),
         allowNull: true
       },
+      volunteer_message: {
+        type: Sequelize.TEXT,
+        allowNull: true
+      },
+      total_slots: {
+        type: Sequelize.INTEGER,
+        defaultValue: 1,
+        allowNull: false
+      },
+      dropoff_location: {
+        type: Sequelize.STRING(255),
+        allowNull: true
+      },
+      finished_at: {
+        type: Sequelize.DATE,
+        allowNull: true
+      },
+      device_id: {
+        type: Sequelize.STRING(255),
+        allowNull: true
+      },
+      is_verified: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false
+      },
+      description: {
+        type: Sequelize.TEXT,
+        allowNull: true
+      },
+      sub_type: {
+        type: Sequelize.STRING(255),
+        allowNull: true
+      },
       created_at: {
         allowNull: false,
         type: Sequelize.DATE,

@@ -17,8 +17,51 @@ const isShelterManager = async (req, shelter) => {
 // ==========================================
 
 /**
- * POST /api/v1/shelters
- * Cadastrar novo abrigo. (Exige admin ou master ou manager)
+ * @swagger
+ * components:
+ *   schemas:
+ *     Shelter:
+ *       type: object
+ *       properties:
+ *         id_code: { type: string }
+ *         name: { type: string }
+ *         capacity: { type: integer }
+ *         occupied: { type: integer }
+ *         has_water: { type: boolean }
+ *         accepts_pets: { type: boolean }
+ *     ShelterEntry:
+ *       type: object
+ *       properties:
+ *         name: { type: string }
+ *         people_count: { type: integer }
+ *         status: { type: string, enum: [request, present, left] }
+ */
+
+/**
+ * @swagger
+ * /api/v1/shelters:
+ *   post:
+ *     summary: Cadastrar novo abrigo
+ *     tags: [Shelters]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application_json:
+ *           schema: { $ref: '#/components/schemas/Shelter' }
+ *   get:
+ *     summary: Listar abrigos próximos (Haversine)
+ *     tags: [Shelters]
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lng
+ *         schema: { type: number }
+ *       - in: query
+ *         name: radiusKm
+ *         schema: { type: number, default: 20 }
  */
 router.post('/', authenticateToken, async (req, res) => {
   try {

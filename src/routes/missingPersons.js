@@ -16,8 +16,41 @@ const extractUserIfExists = async (req, res, next) => {
 };
 
 /**
- * POST /api/v1/missing
- * Registrar pessoa desaparecida
+ * @swagger
+ * components:
+ *   schemas:
+ *     MissingPerson:
+ *       type: object
+ *       properties:
+ *         id_code: { type: string }
+ *         name: { type: string }
+ *         age: { type: integer }
+ *         status: { type: string, enum: [missing, found] }
+ *         last_seen_location: { type: string }
+ *         description: { type: string }
+ */
+
+/**
+ * @swagger
+ * /api/v1/missing:
+ *   post:
+ *     summary: Registrar uma pessoa desaparecida
+ *     tags: [Missing Persons]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: '#/components/schemas/MissingPerson' }
+ *   get:
+ *     summary: Listar todas as pessoas desaparecidas
+ *     tags: [Missing Persons]
+ *     parameters:
+ *       - in: query
+ *         name: name
+ *         schema: { type: string }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [missing, found] }
  */
 router.post('/', extractUserIfExists, async (req, res) => {
   try {

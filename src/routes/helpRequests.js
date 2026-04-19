@@ -30,8 +30,64 @@ const extractUserIfExists = async (req, res, next) => {
 };
 
 /**
- * POST /api/v1/requests
- * Criar novo pedido de ajuda. (Aberto ao público)
+ * @swagger
+ * components:
+ *   schemas:
+ *     HelpRequest:
+ *       type: object
+ *       properties:
+ *         id_code:
+ *           type: string
+ *           description: Identificador único UUID exposto publicamente.
+ *         type:
+ *           type: string
+ *           enum: [rescue, shelter, medical, food, transport, boat, volunteer]
+ *           description: Tipo de solicitação de ajuda.
+ *         status:
+ *           type: string
+ *           enum: [pending, viewed, attending, resolved]
+ *           description: Estado atual do pedido.
+ *         urgency:
+ *           type: string
+ *           enum: [high, medium, low]
+ *           description: Nível de criticidade (padrão high).
+ *         people_count:
+ *           type: integer
+ *           description: Número de pessoas que precisam de ajuda.
+ *         address:
+ *           type: string
+ *           description: Endereço completo ou descrição do local.
+ *         lat:
+ *           type: number
+ *           format: float
+ *         lng:
+ *           type: number
+ *           format: float
+ *         volunteer_message:
+ *           type: string
+ *           description: Mensagem enviada pelo salvador ao aceitar a missão.
+ *         is_verified:
+ *           type: boolean
+ *           description: Se o pedido foi feito por um usuário logado ou verificado.
+ */
+
+/**
+ * @swagger
+ * /api/v1/requests:
+ *   post:
+ *     summary: Criar um novo pedido de ajuda (SOS/Logística)
+ *     tags: [Help Requests]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/HelpRequest'
+ *     responses:
+ *       201:
+ *         description: Pedido criado com sucesso.
+ *       429:
+ *         description: Flood - Usuário já tem um pedido pendente recentemente.
  */
 router.post('/', extractUserIfExists, async (req, res) => {
   try {
@@ -78,8 +134,31 @@ router.post('/', extractUserIfExists, async (req, res) => {
 });
 
 /**
- * GET /api/v1/requests
- * Listar pedidos (com filtros por tipo, status e proximidade/lat-lng).
+ * @swagger
+ * /api/v1/requests:
+ *   get:
+ *     summary: Listar e filtrar pedidos de ajuda
+ *     tags: [Help Requests]
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         schema: { type: number }
+ *         description: Latitude para centro de busca (Haversine)
+ *       - in: query
+ *         name: lng
+ *         schema: { type: number }
+ *         description: Longitude para centro de busca (Haversine)
+ *       - in: query
+ *         name: radiusKm
+ *         schema: { type: number, default: 10 }
+ *         description: Raio de busca em quilômetros
+ *       - in: query
+ *         name: type
+ *         schema: { type: string }
+ *         description: Filtrar por tipo (rescue, food, etc)
+ *     responses:
+ *       200:
+ *         description: Sucesso. Retorna lista de pedidos com distância se lat/lng fornecidos.
  */
 router.get('/', async (req, res) => {
   try {
@@ -204,9 +283,31 @@ router.get('/:id_code', async (req, res) => {
 });
 
 /**
- * PUT /api/v1/requests/:id_code/status
- * Atualizar status (ex: aceitar pedido).
- * (Requer autenticação de voluntário/motorista/barqueiro)
+ * @swagger
+ * /api/v1/requests/{id_code}/status:
+ *   put:
+ *     summary: Voluntário aceita ou finaliza um atendimento
+ *     tags: [Help Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id_code
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [attending, resolved] }
+ *               volunteer_message: { type: string }
+ *               shelter_id: { type: string, description: "UUID do abrigo para check-in automático" }
+ *     responses:
+ *       200:
+ *         description: Status atualizado. Se status=resolved e shelter_id presente, faz check-in automático.
  */
 router.put('/:id_code/status', authenticateToken, async (req, res) => {
   try {

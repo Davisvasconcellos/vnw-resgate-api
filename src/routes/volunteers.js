@@ -4,8 +4,34 @@ const { VolunteerProfile, HelpRequest, ShelterVolunteer, Shelter, sequelize } = 
 const { authenticateToken } = require('../middlewares/auth');
 
 /**
- * POST /api/v1/volunteers/profile
- * Criar perfil do voluntário (Onboarding)
+ * @swagger
+ * components:
+ *   schemas:
+ *     VolunteerProfile:
+ *       type: object
+ *       properties:
+ *         offer_type: { type: string, enum: [transport, boat, volunteer] }
+ *         vehicle_type: { type: string }
+ *         seats_available: { type: integer }
+ *         skills: { type: object }
+ */
+
+/**
+ * @swagger
+ * /api/v1/volunteers/profile:
+ *   post:
+ *     summary: Criar ou atualizar perfil do voluntário
+ *     tags: [Volunteers]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: '#/components/schemas/VolunteerProfile' }
+ *   get:
+ *     summary: Obter perfil do voluntário logado
+ *     tags: [Volunteers]
+ *     security: [{ bearerAuth: [] }]
  */
 router.post('/profile', authenticateToken, async (req, res) => {
   try {

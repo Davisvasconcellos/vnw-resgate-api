@@ -1,347 +1,155 @@
-# vnw-resgate-api
+# 🛡️ VNW Resgate — API de Missão Crítica (V1.0)
 
-API de CRUD de Usuários básica.  
-Projetada como base de estudo para alunos — simples, segura e pronta para expandir.
-
----
-
-## 🛡️ Recursos de Segurança
-
-### UUID como Identificador Público
-Todos os registros possuem um campo `id_code` (UUID v4) que é o **único identificador exposto nas respostas da API**. O `id` sequencial interno do banco de dados **nunca é retornado** ao cliente, evitando:
-- Enumeração de registros por atacantes
-- Vazamento da quantidade de registros no sistema
-- Ataques de previsão de ID (IDOR)
-
-### Autenticação via JWT (JSON Web Token)
-- Toda rota protegida exige um token JWT válido no header `Authorization: Bearer <token>`
-- O middleware `authenticateToken` verifica a validade do token em **cada requisição**
-- Tokens possuem **prazo de expiração** configurável (padrão: 24h)
-- Cache em memória no middleware evita consultas desnecessárias ao banco
-
-### Token Blocklist (Logout Seguro)
-- O endpoint `POST /auth/logout` invalida o token atual, adicionando-o à **blocklist no banco de dados**
-- Mesmo que o token ainda não tenha expirado, ele é **rejeitado imediatamente** após o logout
-- Cache em memória da blocklist (TTL: 60s) para performance
-
-### Controle de Acesso por Roles
-O sistema implementa 5 níveis de acesso hierárquicos:
-| Role | Nível | Descrição |
-|------|-------|-----------|
-| `master` | 🔴 Máximo | Super administrador — acesso total |
-| `admin` | 🟠 Alto | Administrador — gerencia usuários e dados |
-| `manager` | 🟡 Médio | Gerente — acesso administrativo limitado |
-| `volunteer` | 🟢 Básico | Voluntário — acesso às funções operacionais |
-| `people` | 🔵 Padrão | Cidadão — perfil padrão no cadastro |
-
-### Proteções Adicionais
-- **Helmet.js** — Headers HTTP de segurança contra XSS, clickjacking, etc.
-- **Rate Limiting** — Limite de 1000 requisições por IP a cada 15 minutos
-- **Speed Limiting** — Adiciona delay progressivo após 500 requisições
-- **CORS** — Configurável via variável de ambiente
-- **Bcrypt (12 rounds)** — Senhas nunca armazenadas em texto puro
+O motor do ecossistema **VNW Resgate**, uma API robusta desenvolvida em Node.js com Sequelize e PostgreSQL, projetada para coordenar operações de salvamento, gestão de abrigos e logística de voluntariado em tempo real.
 
 ---
 
-## 🔌 Integrações Prontas
+## 🏗️ Arquitetura e Inteligência Operacional
 
-### Login com Google (Firebase)
-A API está preparada para autenticação via Google OAuth usando Firebase Admin SDK.  
-Para ativar, basta configurar no `.env`:
-```env
-FIREBASE_PROJECT_ID=seu_project_id
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk@seu_project.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-```
-O endpoint `POST /api/v1/auth/google` recebe o `idToken` do Firebase no frontend e:
-1. Verifica o token com o Firebase Admin SDK
-2. Cria o usuário automaticamente se não existir
-3. Vincula a conta Google se o email já existir
-4. Retorna o token JWT da API
+### 1. 📍 Geolocalização via Haversine (Native SQL)
+A API processa buscas espaciais complexas diretamente no banco de dados. Utilizamos a **Fórmula de Haversine** para filtrar pedidos de ajuda e abrigos por raio de distância (`radiusKm`), garantindo que os voluntários vejam apenas o que podem atender.
 
-### Upload de Arquivos (Google Drive)
-Sistema completo de upload de arquivos para o Google Drive via OAuth2:
-- **Upload** — `POST /api/v1/uploads` recebe um arquivo via `multipart/form-data`
-- **Proxy** — `GET /api/v1/files/:id` serve o arquivo diretamente, evitando problemas de CORS
-- Organização automática em pastas no Drive
-- Suporte a imagens, PDFs e outros tipos de arquivo
+### 2. 🏠 Hooks de Impacto (Shelter Sync)
+Implementamos uma automação logística vital: ao concluir um resgate com destino a um abrigo, o sistema recalcula automaticamente a **taxa de ocupação** do local, criando um registro de entrada (`ShelterEntry`) sem intervenção manual.
 
-Para ativar, configure no `.env`:
-```env
-GOOGLE_DRIVE_CLIENT_ID=seu_client_id
-GOOGLE_DRIVE_CLIENT_SECRET=seu_client_secret
-GOOGLE_DRIVE_REDIRECT_URI=https://sua-api/api/v1/uploads/oauth/callback
-GOOGLE_DRIVE_REFRESH_TOKEN=seu_refresh_token
-GOOGLE_DRIVE_FOLDER_ID=id_da_pasta_raiz
-```
-
-### Geração de PDFs
-Serviço utilitário (`pdfService.js`) para gerar PDFs a partir de HTML usando Puppeteer.  
-Exemplo de uso em uma rota customizada:
-```javascript
-const pdfService = require('./services/pdfService');
-const buffer = await pdfService.generatePdf('<h1>Relatório</h1><p>Conteúdo...</p>');
-res.setHeader('Content-Type', 'application/pdf');
-res.send(buffer);
-```
+### 3. 🛡️ Segurança por Obscuridade & JWT
+*   **UUID v4:** O campo `id_code` é a única identidade exposta publicamente. IPs sequenciais são protegidos e nunca retornados.
+*   **Auth Híbrida:** Suporte nativo para email/senha e **Google Login (Firebase Admin SDK)**.
+*   **JWT Life-Cycle:** Sistema completo de tokens com Refresh Token e invalidação de Logout.
+*   **Hierarquia de Roles:** Sistema granular de permissões (`master`, `admin`, `manager`, `volunteer`, `people`).
 
 ---
 
-## 📚 Tecnologias
+## ⚡ Power Features (Recursos Avançados)
 
-| Tecnologia | Versão | Descrição |
-|------------|--------|-----------|
-| Node.js | 20+ | Runtime JavaScript |
-| Express | 4.x | Framework HTTP |
-| Sequelize | 6.x | ORM (PostgreSQL / MySQL) |
-| JWT | 9.x | Autenticação por token |
-| Bcrypt | 2.x | Hash de senhas |
-| Firebase Admin | 13.x | Login com Google |
-| Multer | 1.x | Upload de arquivos |
-| Puppeteer | 24.x | Geração de PDFs |
-| Swagger | 6.x | Documentação interativa |
+O ecossistema VNW Resgate vai além do CRUD básico, integrando serviços de nível empresarial:
 
----
+### 📄 Gerador de PDFs (Puppeteer Engine)
+Sistema utilitário para conversão de dados operacionais em documentos PDF formatados. Ideal para emissão de relatórios de abrigos ou listas de passageiros em resgates.
 
-## 🚀 Setup Rápido
+### 📂 Google Drive Integration
+Integração nativa com a API do Google Drive para armazenamento de evidências fotográficas:
+*   **Automated Folders**: Criação dinâmica de estrutura de pastas (Ex: `pedidos/fotos/2024`).
+*   **Secure Proxy**: Os arquivos são servidos através de um proxy na API, garantindo conformidade com políticas de CORS e segurança.
 
-```bash
-# 1. Clonar o repositório
-git clone https://github.com/Davisvasconcellos/vnw-resgate-api.git
-cd vnw-resgate-api
-
-# 2. Instalar dependências
-npm install
-
-# 3. Configurar variáveis de ambiente
-cp env.example .env
-# Edite o .env com suas credenciais do banco
-
-# 4. Criar as tabelas no banco de dados
-# Opção A: Via Sequelize Migration
-npx sequelize-cli db:migrate
-
-# Opção B: Via SQL direto (veja seção Schema abaixo)
-
-# 5. Iniciar o servidor
-npm run dev
-
-# 6. Acessar documentação
-# http://localhost:4000/api-docs
-```
+### 🔑 Google Auth & Auto-User Provisioning
+Fluxo automatizado de autenticação social:
+*   Se o usuário fizer login via Google e não existir no sistema, a API **cria automaticamente** o perfil, baixa o avatar e vincula as credenciais com segurança.
 
 ---
 
-## 📋 Endpoints
+## 📋 Módulos e Endpoints
+Temos a documentação completa da API no swagger : http://localhost:4000/api-docs
+E por medida de segurança, só abre em dev. 
 
-### Auth (`/api/v1/auth`)
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/register` | Cadastro público (role padrão: `people`) | ❌ |
-| `POST` | `/login` | Login com email e senha | ❌ |
-| `POST` | `/google` | Login com Google (Firebase) | ❌ |
-| `GET` | `/me` | Dados do usuário logado | 🔒 Token |
-| `POST` | `/refresh` | Renovar token JWT antes de expirar | 🔒 Token |
-| `POST` | `/logout` | Invalidar token (blocklist) | 🔒 Token |
+Mas como estamos em dev com a aplicação do **VNW Resgate**, vou deixar aqui os principais endpoints:
 
-### Users (`/api/v1/users`)
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `GET` | `/` | Listar todos (paginado, com busca) | 🔒 Admin |
-| `GET` | `/:id` | Obter por ID ou UUID (`id_code`) | 🔒 Admin |
-| `POST` | `/` | Criar novo usuário com role definida | 🔒 Admin |
-| `PUT` | `/me` | Atualizar próprio perfil | 🔒 Token |
-| `PATCH` | `/me` | Atualizar avatar | 🔒 Token |
-| `PUT` | `/:id` | Atualizar qualquer usuário | 🔒 Admin |
-| `POST` | `/:id_code/reset-password` | Resetar senha de um usuário | 🔒 Admin |
-| `DELETE` | `/:id` | Deletar usuário | 🔒 Admin |
+### 🆘 Salvamento (`/api/v1/requests`)
+*   `POST /` : Criação de pedidos de resgate (Suporta Fingerprint/DeviceID).
+*   `GET /` : Busca inteligente por raio km e tipo (SOS, Médico, Transporte, Barco).
+*   `PUT /:id_code/status` : Fluxo de aceite por voluntários com suporte a mensagens de apoio.
 
-### Help Requests (Resgates & Pedidos de Ajuda) - `/api/v1/requests`
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/` | Criar um pedido de resgate (público ou logado) | ❌/🔒 |
-| `GET` | `/` | Buscar pedidos (Filtros: `type`, `status`, `lat`, `lng`, `radiusKm`) | ❌ |
-| `GET` | `/:id_code` | Obter detalhes do pedido | ❌ |
-| `PUT` | `/:id_code/status` | Voluntário assume/atualiza status do resgate | 🔒 Token |
+### 🏛️ Abrigos (`/api/v1/shelters`)
+*   `GET /` : Lista de abrigos com indicadores de suprimentos (água, luz, pet-friendly).
+*   `POST /:id_code/entries` : Registro de acolhimento de pessoas.
+*   `GET /:id_code/entries` : Monitoramento em tempo real de quem está no abrigo.
 
-### Pessoas Desaparecidas - `/api/v1/missing`
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/` | Registrar uma pessoa desaparecida | ❌/🔒 |
-| `GET` | `/` | Busca paginada (Filtros: `name`, `status`) | ❌ |
-| `GET` | `/:id_code` | Detalhe do desaparecido | ❌ |
-| `PUT` | `/:id_code/status` | Marcar como encontrado | 🔒 Token |
-
-### Abrigos (Shelters & Lotação) - `/api/v1/shelters`
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/` | Cadastrar novo abrigo | 🔒 Admin/Manager |
-| `GET` | `/` | Busca paginada e por Geolocalização (Haversine) | ❌ |
-| `GET` | `/:id_code` | Detalhes físicos e capacidade do abrigo | ❌ |
-| `POST` | `/:id_code/entries` | Solicitação/Registro de entrada (Pessoa no abrigo) | ❌ |
-| `GET` | `/:id_code/entries` | Listagem das lotações/entradas | 🔒 Token |
-| `PUT` | `/:id_code/entries/:entry_id` | Altera status (`present` ou `left`) -> *Lotação autom. via Hook* | 🔒 Manager/Admin |
-| `POST` | `/:id_code/volunteers` | Abrigo envia convite de trabalho para voluntário | 🔒 Manager/Admin |
-
-### Voluntários - `/api/v1/volunteers`
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/profile` | Preenche o form de base (Onboarding logístico) | 🔒 Token |
-| `GET` | `/profile` | Busca os dados armazenados como voluntário do user logado | 🔒 Token |
-| `GET` | `/tasks` | Retorna abrigos com convite + atendimentos de resgate em andamento | 🔒 Token |
-| `PUT` | `/invites/:shelter_id_code` | Voluntário aceita (`accepted`) convite ao abrigo | 🔒 Token |
-
-### Upload/Files
-| Método | Rota | Descrição | Auth |
-|--------|------|-----------|------|
-| `POST` | `/api/v1/uploads` | Upload de arquivo para Google Drive | ❌ |
-| `GET` | `/api/v1/files/:id` | Proxy de exibição de arquivo | ❌ |
-
-### Documentação
-| Rota | Descrição |
-|------|-----------|
-| `/api-docs` | Swagger UI — documentação interativa |
+### 🛡️ Voluntariado (`/api/v1/volunteers`)
+*   `GET /tasks` : Dashboard unificado para o voluntário (Missões aceitas + Convites).
+*   `POST /profile` : Cadastro de competências (Barco, Jet-ski, Primeiros Socorros).
 
 ---
 
-## 🗄️ Schema do Banco de Dados (SQL)
+## 🗄️ SQL Schema (V1.0 Final)
 
-Para criar as tabelas manualmente no seu servidor PostgreSQL, execute o SQL abaixo.
-
-> **⚠️ IMPORTANTE**: Esse script cria APENAS as tabelas da API. Se o banco já tiver outras tabelas, elas NÃO serão afetadas.
+Use o script abaixo para inicializar seu banco de dados PostgreSQL com a estrutura operacional completa:
 
 ```sql
--- ==========================================
--- TABELA: plans
--- ==========================================
-CREATE TABLE IF NOT EXISTS plans (
+-- TABELA PRINCIPAL DE PEDIDOS DE AJUDA
+CREATE TABLE IF NOT EXISTS help_requests (
   id SERIAL PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
+  user_id INTEGER REFERENCES users(id),
+  accepted_by INTEGER REFERENCES users(id),
+  type VARCHAR(50) NOT NULL, -- rescue, medical, food, transport, boat, shelter
+  status VARCHAR(50) DEFAULT 'pending', -- pending, attending, resolved
+  urgency VARCHAR(50) DEFAULT 'high',
+  people_count INTEGER DEFAULT 1,
+  address TEXT,
+  lat DECIMAL(10, 7),
+  lng DECIMAL(10, 7),
   description TEXT,
-  price DECIMAL(10, 2) NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  volunteer_message TEXT,
+  is_verified BOOLEAN DEFAULT FALSE,
+  device_id VARCHAR(255), -- Fingerprint para offline sync
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ==========================================
--- TIPOS ENUM
--- ==========================================
-DO $$ BEGIN
-  CREATE TYPE enum_users_role AS ENUM ('master', 'admin', 'manager', 'volunteer', 'people');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-DO $$ BEGIN
-  CREATE TYPE enum_users_status AS ENUM ('active', 'inactive', 'pending_verification', 'banned');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
--- ==========================================
--- TABELA: users
--- ==========================================
-CREATE TABLE IF NOT EXISTS users (
+-- TABELA DE ABRIGOS E LOGÍSTICA
+CREATE TABLE IF NOT EXISTS shelters (
   id SERIAL PRIMARY KEY,
-  id_code VARCHAR(255) UNIQUE,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
   name VARCHAR(255) NOT NULL,
-  email VARCHAR(255) UNIQUE,
-  phone VARCHAR(20),
-  password_hash VARCHAR(255) NOT NULL,
-  role enum_users_role NOT NULL DEFAULT 'people',
-  google_id VARCHAR(255) UNIQUE,
-  google_uid VARCHAR(255) UNIQUE,
-  avatar_url VARCHAR(500),
-  birth_date DATE,
-  address_street VARCHAR(255),
-  address_number VARCHAR(20),
-  address_complement VARCHAR(255),
-  address_neighborhood VARCHAR(255),
-  address_city VARCHAR(255),
-  address_state VARCHAR(2),
-  address_zip_code VARCHAR(10),
-  email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-  status enum_users_status NOT NULL DEFAULT 'active',
-  plan_id INTEGER REFERENCES plans(id) ON UPDATE CASCADE ON DELETE SET NULL,
-  plan_start DATE,
-  plan_end DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  address TEXT,
+  capacity INTEGER DEFAULT 0,
+  occupied INTEGER DEFAULT 0,
+  has_water BOOLEAN DEFAULT FALSE,
+  has_energy BOOLEAN DEFAULT FALSE,
+  accepts_pets BOOLEAN DEFAULT FALSE,
+  lat DECIMAL(10, 7),
+  lng DECIMAL(10, 7),
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ==========================================
--- TABELA: token_blocklist
--- ==========================================
-CREATE TABLE IF NOT EXISTS token_blocklist (
-  id SERIAL PRIMARY KEY,
-  token VARCHAR(512) NOT NULL UNIQUE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ==========================================
--- TABELA DE CONTROLE DO SEQUELIZE (opcional)
--- ==========================================
-CREATE TABLE IF NOT EXISTS "SequelizeMeta" (
-  name VARCHAR(255) NOT NULL UNIQUE PRIMARY KEY
-);
+-- CONSULTE A PASTA /src/migrations PARA O SCHEMA COMPLETO
 ```
 
 ---
 
-## 📁 Estrutura do Projeto
+## 🚀 Setup Rápido (Replicação)
 
+### 💻 Local
+```bash
+# 1. Instalar dependências
+npm install
+
+# 2. Configurar o Banco de Dados (.env)
+cp env.example .env
+
+# 3. Inicialização Automatizada
+npm run db:setup
+
+# 4. Iniciar o Motor
+npm run dev
 ```
-vnw-resgate-api/
-├── src/
-│   ├── config/
-│   │   ├── config.js          # Config Sequelize CLI
-│   │   ├── database.js        # Conexão com o banco
-│   │   └── firebaseAdmin.js   # Firebase Admin SDK
-│   ├── middlewares/
-│   │   ├── auth.js            # authenticateToken + requireRole
-│   │   └── errorHandler.js    # Tratamento global de erros
-│   ├── migrations/
-│   │   └── 20260416...-create-users-plans-token-blocklist.js
-│   ├── models/
-│   │   ├── User.js            # Modelo de usuário
-│   │   ├── Plan.js            # Modelo de plano
-│   │   ├── TokenBlocklist.js  # Modelo de tokens invalidados
-│   │   └── index.js           # Associações
-│   ├── routes/
-│   │   ├── auth.js            # Login, registro, Google, logout
-│   │   ├── users.js           # CRUD de usuários
-│   │   ├── upload.js          # Upload para Google Drive
-│   │   ├── files.js           # Proxy de arquivos
-│   │   └── pdf.js             # Geração de PDFs
-│   ├── services/
-│   │   └── pdfService.js      # Geração de PDFs
-│   ├── utils/
-│   │   └── requestContext.js  # Contexto de requisição
-│   └── server.js              # Entry point
-├── .env.example
-├── .gitignore
-├── .sequelizerc
-├── docker-compose.yml         # MySQL local (opcional)
-├── package.json
-└── README.md
-```
+
+### ☁️ Produção (Render)
+Para o deploy no **Render**:
+1.  **Variáveis de Ambiente**: Configure todas as variáveis presentes no `.env.example` diretamente no painel do Render (*Environment Variables*).
+2.  **Firebase JSON**: A `FIREBASE_PRIVATE_KEY` deve conter as quebras de linha `\n` corretamente para ser interpretada pelo Admin SDK.
+3.  **Database**: Utilize um banco de dados gerenciado (como o Render PostgreSQL) e insira a URL na variável `DATABASE_URL`.
 
 ---
 
-## 📝 Variáveis de Ambiente
+## 🔗 Links Oficiais para Configuração
+*   **Firebase Admin SDK**: [Firebase Console](https://console.firebase.google.com/) -> Configurações do Projeto -> Contas de Serviço -> Gerar nova chave privada.
+*   **Google Drive API**: [Google Cloud Console](https://console.cloud.google.com/) -> APIs e Serviços -> Ativar 'Google Drive API' e criar 'ID do cliente OAuth 2.0'.
 
-| Variável | Obrigatória | Descrição |
-|----------|:-----------:|-----------|
-| `DATABASE_URL` | ✅ | URL de conexão PostgreSQL |
-| `JWT_SECRET` | ✅ | Chave secreta para assinar tokens JWT |
-| `PORT` | ❌ | Porta do servidor (padrão: 4000) |
-| `NODE_ENV` | ❌ | Ambiente: `development` ou `production` |
-| `FIREBASE_PROJECT_ID` | ❌ | ID do projeto Firebase (login Google) |
-| `FIREBASE_CLIENT_EMAIL` | ❌ | Email do service account |
-| `FIREBASE_PRIVATE_KEY` | ❌ | Chave privada do service account |
-| `GOOGLE_DRIVE_CLIENT_ID` | ❌ | Client ID OAuth2 (upload) |
-| `GOOGLE_DRIVE_CLIENT_SECRET` | ❌ | Client Secret OAuth2 |
-| `GOOGLE_DRIVE_REFRESH_TOKEN` | ❌ | Refresh token OAuth2 |
-| `GOOGLE_DRIVE_FOLDER_ID` | ❌ | ID da pasta raiz no Drive |
+### 🗃️ Guia de Banco de Dados
+O comando `npm run db:setup` garante que:
+1. Todas as tabelas operacionais (Pedidos, Abrigos, Voluntários) sejam criadas.
+2. Os **Planos de Acesso** fundamentais sejam inseridos via `Seeders`. (admin, master, voluntário)
+
+### 📝 Variáveis de Ambiente Críticas
+
+| Variável | Uso |
+|----------|-----|
+| `JWT_SECRET` | Assinatura dos tokens de segurança |
+| `DATABASE_URL` | Conexão com PostgreSQL |
+| `FIREBASE_*` | Credenciais para Login com Google |
+| `GOOGLE_DRIVE_*` | Credenciais OAuth2 para Upload de fotos |
 
 ---
 
-**Desenvolvido por Davis Vasconcellos** 🚀
+**VNW Resgate API** — *Onde a tecnologia encontra a esperança.* 🚀🛡️
