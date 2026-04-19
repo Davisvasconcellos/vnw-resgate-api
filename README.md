@@ -138,7 +138,7 @@ Para o deploy no **Render**:
 
 ### 🗃️ Guia de Banco de Dados
 O comando `npm run db:setup` garante que:
-1. Todas as tabelas operacionais (Pedidos, Abrigos, Voluntários) sejam criadas.
+1. Todas as tabelas operacionais (Pedidos, Abrigos, Voluntários) sejam criadas. (Mamão com açucar)
 2. Os **Planos de Acesso** fundamentais sejam inseridos via `Seeders`. (admin, master, voluntário)
 
 ### 📝 Variáveis de Ambiente Críticas
