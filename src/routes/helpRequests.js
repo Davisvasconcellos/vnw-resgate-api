@@ -152,6 +152,32 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/requests/my
+ * Listar pedidos do usuário logado (cidadão).
+ */
+router.get('/my', authenticateToken, async (req, res) => {
+  try {
+    const requests = await HelpRequest.findAll({
+      where: { user_id: req.user.userId },
+      include: [
+        { model: User, as: 'requester', attributes: ['name', 'phone'] },
+        { model: User, as: 'volunteer', attributes: ['name', 'phone'] },
+        { model: Shelter, as: 'shelter', attributes: ['id_code', 'name', 'phone'] }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: requests
+    });
+  } catch (error) {
+    console.error('Error fetching my requests:', error);
+    return res.status(500).json({ success: false, message: 'Erro interno no servidor' });
+  }
+});
+
+/**
  * GET /api/v1/requests/:id_code
  * Detalhes do pedido.
  */
