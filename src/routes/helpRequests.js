@@ -129,8 +129,8 @@ router.get('/', async (req, res) => {
       where: whereClause,
       attributes,
       include: [
-        { model: User, as: 'requester', attributes: ['name', 'phone'] },
-        { model: User, as: 'volunteer', attributes: ['name', 'phone'] },
+        { model: User, as: 'requester', attributes: ['name', 'phone', 'avatar_url'] },
+        { model: User, as: 'volunteer', attributes: ['name', 'phone', 'avatar_url'] },
         { model: Shelter, as: 'shelter', attributes: ['id_code', 'name', 'phone'] }
       ],
       order,
@@ -160,8 +160,8 @@ router.get('/my', authenticateToken, async (req, res) => {
     const requests = await HelpRequest.findAll({
       where: { user_id: req.user.userId },
       include: [
-        { model: User, as: 'requester', attributes: ['name', 'phone'] },
-        { model: User, as: 'volunteer', attributes: ['name', 'phone'] },
+        { model: User, as: 'requester', attributes: ['name', 'phone', 'avatar_url'] },
+        { model: User, as: 'volunteer', attributes: ['name', 'phone', 'avatar_url'] },
         { model: Shelter, as: 'shelter', attributes: ['id_code', 'name', 'phone'] }
       ],
       order: [['created_at', 'DESC']]
@@ -186,8 +186,8 @@ router.get('/:id_code', async (req, res) => {
     const request = await HelpRequest.findOne({
       where: { id_code: req.params.id_code },
       include: [
-        { model: User, as: 'requester', attributes: ['name', 'phone'] },
-        { model: User, as: 'volunteer', attributes: ['name', 'phone'] },
+        { model: User, as: 'requester', attributes: ['name', 'phone', 'avatar_url'] },
+        { model: User, as: 'volunteer', attributes: ['name', 'phone', 'avatar_url'] },
         { model: Shelter, as: 'shelter', attributes: ['id_code', 'name', 'phone'] }
       ]
     });
