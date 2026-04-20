@@ -120,6 +120,19 @@ const User = sequelize.define('User', {
   plan_end: {
     type: DataTypes.DATEONLY,
     allowNull: true
+  },
+  lat: {
+    type: DataTypes.DECIMAL(10, 8),
+    allowNull: true
+  },
+  lng: {
+    type: DataTypes.DECIMAL(11, 8),
+    allowNull: true
+  },
+  use_default_location: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
   }
 }, {
   tableName: 'users',

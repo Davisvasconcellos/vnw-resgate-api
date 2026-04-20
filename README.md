@@ -7,16 +7,17 @@ O motor do ecossistema **VNW Resgate**, uma API robusta desenvolvida em Node.js 
 ## 🏗️ Arquitetura e Inteligência Operacional
 
 ### 1. 📍 Geolocalização via Haversine (Native SQL)
-A API processa buscas espaciais complexas diretamente no banco de dados. Utilizamos a **Fórmula de Haversine** para filtrar pedidos de ajuda e abrigos por raio de distância (`radiusKm`), garantindo que os voluntários vejam apenas o que podem atender.
+A API processa buscas espaciais complexas diretamente no banco de dados. Utilizei a **Fórmula de Haversine** para filtrar pedidos de ajuda e abrigos por raio de distância (`radiusKm`), garantindo que os voluntários vejam apenas o que podem atender.
 
 ### 2. 🏠 Hooks de Impacto (Shelter Sync)
-Implementamos uma automação logística vital: ao concluir um resgate com destino a um abrigo, o sistema recalcula automaticamente a **taxa de ocupação** do local, criando um registro de entrada (`ShelterEntry`) sem intervenção manual.
+Implementei uma automação logística vital: ao concluir um resgate com destino a um abrigo, o sistema recalcula automaticamente a **taxa de ocupação** do local, criando um registro de entrada (`ShelterEntry`) sem intervenção manual.
 
 ### 3. 🛡️ Segurança por Obscuridade & JWT
 *   **UUID v4:** O campo `id_code` é a única identidade exposta publicamente. IPs sequenciais são protegidos e nunca retornados.
 *   **Auth Híbrida:** Suporte nativo para email/senha e **Google Login (Firebase Admin SDK)**.
 *   **JWT Life-Cycle:** Sistema completo de tokens com Refresh Token e invalidação de Logout.
-*   **Hierarquia de Roles:** Sistema granular de permissões (`master`, `admin`, `manager`, `volunteer`, `people`).
+*   **Hierarquia de Roles (V2.0):** Sistema granular de permissões incluindo perfis de resgate (`civilian`, `shelter`, `transport`, `boat`, `volunteer`, `people`, `admin`, `master`).
+*   **Onboarding Inteligente:** Suporte nativo para redirecionamento condicional. A API sinaliza ao frontend a necessidade de completude de perfil (endereço/coordenadas) para habilitar buscas por proximidade.
 
 ---
 
@@ -60,49 +61,170 @@ Mas como estamos em dev com a aplicação do **VNW Resgate**, vou deixar aqui os
 
 ---
 
-## 🗄️ SQL Schema (V1.0 Final)
+## 🗄️ SQL Schema (Full MySQL/MariaDB)
 
-Use o script abaixo para inicializar seu banco de dados PostgreSQL com a estrutura operacional completa:
+Use o script abaixo para inicializar seu banco de dados MySQL/MariaDB com a estrutura operacional completa. Este script contém todas as tabelas, relacionamentos e enums necessários:
 
 ```sql
--- TABELA PRINCIPAL DE PEDIDOS DE AJUDA
-CREATE TABLE IF NOT EXISTS help_requests (
-  id SERIAL PRIMARY KEY,
-  id_code VARCHAR(255) UNIQUE NOT NULL,
-  user_id INTEGER REFERENCES users(id),
-  accepted_by INTEGER REFERENCES users(id),
-  type VARCHAR(50) NOT NULL, -- rescue, medical, food, transport, boat, shelter
-  status VARCHAR(50) DEFAULT 'pending', -- pending, attending, resolved
-  urgency VARCHAR(50) DEFAULT 'high',
-  people_count INTEGER DEFAULT 1,
-  address TEXT,
-  lat DECIMAL(10, 7),
-  lng DECIMAL(10, 7),
+-- 1. PLANOS DE ACESSO
+CREATE TABLE IF NOT EXISTS plans (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
   description TEXT,
+  price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. USUÁRIOS
+CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  id_code VARCHAR(255) UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) UNIQUE,
+  phone VARCHAR(20),
+  password_hash VARCHAR(255),
+  role ENUM('master', 'admin', 'manager', 'volunteer', 'people', 'civilian', 'shelter', 'transport', 'boat') DEFAULT 'civilian',
+  google_id VARCHAR(255) UNIQUE,
+  google_uid VARCHAR(255) UNIQUE,
+  avatar_url VARCHAR(500),
+  birth_date DATE,
+  address_street TEXT,
+  address_number VARCHAR(20),
+  address_complement TEXT,
+  address_neighborhood VARCHAR(255),
+  address_city VARCHAR(255),
+  address_state VARCHAR(2),
+  address_zip_code VARCHAR(10),
+  email_verified BOOLEAN DEFAULT FALSE,
+  status ENUM('active', 'inactive', 'pending_verification', 'banned') DEFAULT 'active',
+  plan_id INT,
+  plan_start DATE,
+  plan_end DATE,
+  lat DECIMAL(10, 8),
+  lng DECIMAL(11, 8),
+  use_default_location BOOLEAN DEFAULT FALSE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL
+);
+
+-- 3. TOKEN BLOCKLIST (Logout Security)
+CREATE TABLE IF NOT EXISTS token_blocklist (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  token VARCHAR(512) NOT NULL UNIQUE,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 4. PEDIDOS DE AJUDA (HELP REQUESTS)
+CREATE TABLE IF NOT EXISTS help_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
+  user_id INT,
+  accepted_by INT,
+  shelter_id INT,
+  type ENUM('rescue', 'shelter', 'medical', 'food', 'transport', 'boat') NOT NULL,
+  status ENUM('pending', 'viewed', 'attending', 'resolved') DEFAULT 'pending',
+  urgency ENUM('high', 'medium', 'low') DEFAULT 'high',
+  people_count INT DEFAULT 1,
+  address TEXT,
+  lat DECIMAL(10, 8),
+  lng DECIMAL(11, 8),
+  photo_url VARCHAR(500),
+  reporter_name VARCHAR(255),
+  reporter_phone VARCHAR(20),
   volunteer_message TEXT,
   is_verified BOOLEAN DEFAULT FALSE,
-  device_id VARCHAR(255), -- Fingerprint para offline sync
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
--- TABELA DE ABRIGOS E LOGÍSTICA
-CREATE TABLE IF NOT EXISTS shelters (
-  id SERIAL PRIMARY KEY,
+-- 5. PESSOAS DESAPARECIDAS
+CREATE TABLE IF NOT EXISTS missing_persons (
+  id INT AUTO_INCREMENT PRIMARY KEY,
   id_code VARCHAR(255) UNIQUE NOT NULL,
+  user_id INT,
+  name VARCHAR(255) NOT NULL,
+  age INT,
+  status ENUM('missing', 'found') DEFAULT 'missing',
+  last_seen_location VARCHAR(255),
+  description TEXT,
+  reporter_name VARCHAR(255),
+  reporter_phone VARCHAR(20),
+  photo_url VARCHAR(500),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 6. ABRIGOS (SHELTERS)
+CREATE TABLE IF NOT EXISTS shelters (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
+  user_id INT,
   name VARCHAR(255) NOT NULL,
   address TEXT,
-  capacity INTEGER DEFAULT 0,
-  occupied INTEGER DEFAULT 0,
+  capacity INT,
+  occupied INT DEFAULT 0,
+  phone VARCHAR(20),
+  reference_point VARCHAR(255),
+  lat DECIMAL(10, 8),
+  lng DECIMAL(11, 8),
   has_water BOOLEAN DEFAULT FALSE,
+  has_food BOOLEAN DEFAULT FALSE,
+  has_bath BOOLEAN DEFAULT FALSE,
   has_energy BOOLEAN DEFAULT FALSE,
   accepts_pets BOOLEAN DEFAULT FALSE,
-  lat DECIMAL(10, 7),
-  lng DECIMAL(10, 7),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  has_medical BOOLEAN DEFAULT FALSE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
--- CONSULTE A PASTA /src/migrations PARA O SCHEMA COMPLETO
+-- 7. ENTRADAS EM ABRIGOS (LOG DE OCUPAÇÃO)
+CREATE TABLE IF NOT EXISTS shelter_entries (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
+  shelter_id INT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  phone VARCHAR(20),
+  people_count INT DEFAULT 1,
+  status ENUM('request', 'incoming', 'present', 'left') DEFAULT 'request',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (shelter_id) REFERENCES shelters(id) ON DELETE CASCADE
+);
+
+-- 8. PERFIS DE VOLUNTÁRIOS (HABILIDADES)
+CREATE TABLE IF NOT EXISTS volunteer_profiles (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  id_code VARCHAR(255) UNIQUE NOT NULL,
+  user_id INT NOT NULL,
+  offer_type ENUM('transport', 'boat', 'volunteer') NOT NULL,
+  vehicle_type VARCHAR(100),
+  seats_available INT,
+  region VARCHAR(255),
+  availability ENUM('full', 'morning', 'afternoon', 'night'),
+  skills JSON,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 9. EQUIPE DE ABRIGOS (VÍNCULO VOLUNTÁRIO-ABRIGO)
+CREATE TABLE IF NOT EXISTS shelter_volunteers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  shelter_id INT NOT NULL,
+  status ENUM('pending', 'accepted') DEFAULT 'pending',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (shelter_id) REFERENCES shelters(id) ON DELETE CASCADE
+);
 ```
 
 ---

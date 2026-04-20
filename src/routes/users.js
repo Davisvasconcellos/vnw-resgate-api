@@ -270,7 +270,10 @@ router.put('/me', authenticateToken, [
   body('address_neighborhood').optional({ nullable: true }).isString().trim(),
   body('address_city').optional({ nullable: true }).isString().trim(),
   body('address_state').optional({ nullable: true }).isString(),
-  body('address_zip_code').optional({ nullable: true }).isString().trim()
+  body('address_zip_code').optional({ nullable: true }).isString().trim(),
+  body('lat').optional({ nullable: true }).isNumeric(),
+  body('lng').optional({ nullable: true }).isNumeric(),
+  body('use_default_location').optional().isBoolean()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -286,7 +289,8 @@ router.put('/me', authenticateToken, [
     const allowedUpdates = [
       'name', 'phone', 'avatar_url', 'birth_date',
       'address_street', 'address_number', 'address_complement',
-      'address_neighborhood', 'address_city', 'address_state', 'address_zip_code'
+      'address_neighborhood', 'address_city', 'address_state', 'address_zip_code',
+      'lat', 'lng', 'use_default_location'
     ];
 
     const updateData = {};
@@ -295,6 +299,7 @@ router.put('/me', authenticateToken, [
         updateData[key] = req.body[key];
       }
     }
+    console.log('DEBUG: Final updateData for Sequelize:', updateData);
     await user.update(updateData);
 
     await user.reload({

@@ -66,9 +66,9 @@ module.exports = {
         allowNull: false
       },
       role: {
-        type: Sequelize.ENUM('master', 'admin', 'manager', 'volunteer', 'people'),
+        type: Sequelize.ENUM('master', 'admin', 'manager', 'volunteer', 'people', 'civilian', 'shelter', 'transport', 'boat'),
         allowNull: false,
-        defaultValue: 'people'
+        defaultValue: 'civilian'
       },
       google_id: {
         type: Sequelize.STRING(255),
@@ -143,6 +143,19 @@ module.exports = {
       plan_end: {
         type: Sequelize.DATEONLY,
         allowNull: true
+      },
+      lat: {
+        type: Sequelize.DECIMAL(10, 8),
+        allowNull: true
+      },
+      lng: {
+        type: Sequelize.DECIMAL(11, 8),
+        allowNull: true
+      },
+      use_default_location: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false
       },
       created_at: {
         type: Sequelize.DATE,
