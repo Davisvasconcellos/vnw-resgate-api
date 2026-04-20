@@ -240,6 +240,7 @@ npm install
 cp env.example .env
 
 # 3. Inicialização Automatizada
+# rode o comando abaixo que o script já cria as tabelas para você. só precisa configurar o .env com os dados do postgree
 npm run db:setup
 
 # 4. Iniciar o Motor
