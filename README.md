@@ -63,7 +63,7 @@ Mas como estamos em dev com a aplicação do **VNW Resgate**, vou deixar aqui os
 
 ## 🗄️ SQL Schema (Full MySQL/MariaDB)
 
-Use o script abaixo para inicializar seu banco de dados MySQL/MariaDB com a estrutura operacional completa. Este script contém todas as tabelas, relacionamentos e enums necessários:
+Use o script abaixo para inicializar seu banco de dados PostgreSQLB com a estrutura operacional completa. Este script contém todas as tabelas, relacionamentos e enums necessários:
 
 ```sql
 -- 1. PLANOS DE ACESSO
