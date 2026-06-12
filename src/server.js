@@ -53,13 +53,16 @@ if (!isTestEnv) {
 
 const app = express();
 
-const isDevelopmentEnv = !isTestEnv && (process.env.NODE_ENV || 'development') === 'development';
+const runtimeEnv = process.env.NODE_ENV || 'development';
+const isDevelopmentEnv = !isTestEnv && runtimeEnv === 'development';
+const isProductionEnv = !isTestEnv && runtimeEnv === 'production';
 const DEFAULT_DEV_PORT = 4000;
+const DEFAULT_PROD_PORT = 3000;
 const configuredPort = process.env.PORT ? Number(process.env.PORT) : undefined;
-if (!isTestEnv && !configuredPort && !isDevelopmentEnv) {
+if (!isTestEnv && !configuredPort && !isDevelopmentEnv && !isProductionEnv) {
   throw new Error('PORT environment variable is required');
 }
-const initialPort = configuredPort || DEFAULT_DEV_PORT;
+const initialPort = configuredPort || (isProductionEnv ? DEFAULT_PROD_PORT : DEFAULT_DEV_PORT);
 
 // CORREÇÃO OBRIGATÓRIA NO RENDER (resolve o erro do rate-limit + SSE)
 app.set('trust proxy', 1);
@@ -168,7 +171,7 @@ app.use(errorHandler);
 if (!isTestEnv) {
   const startServer = (port) => {
     const server = app.listen(port, async () => {
-      console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${port}`);
+      console.log(`Server running in ${runtimeEnv} mode on port ${port}`);
       try {
         await testConnection();
         await sequelize.sync({ alter: true }); // Garante que as novas colunas existam
