@@ -3,8 +3,35 @@ const { Sequelize } = require('sequelize');
 const { requestContext } = require('../utils/requestContext');
 
 // Database configuration
-const dialect = process.env.DB_DIALECT || (process.env.DB_PORT === '5432' ? 'postgres' : 'mysql');
-const isPostgres = dialect === 'postgres' || !!process.env.DATABASE_URL;
+const databaseUrl = (process.env.DATABASE_URL || '').trim();
+const dialect = process.env.DB_DIALECT || (databaseUrl ? 'postgres' : 'postgres');
+const isPostgres = dialect === 'postgres' || !!databaseUrl;
+
+const parseBooleanEnv = (value) => {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+};
+
+const shouldUseSslForHostedPostgres = (rawDatabaseUrl) => {
+  try {
+    const hostname = new URL(rawDatabaseUrl).hostname.toLowerCase();
+    return hostname.endsWith('.render.com') || hostname.endsWith('.render.internal');
+  } catch (error) {
+    return false;
+  }
+};
+
+const shouldUseSsl = (() => {
+  const explicit = parseBooleanEnv(process.env.DB_SSL);
+  if (explicit !== undefined) return explicit;
+  if (!databaseUrl) return false;
+  const lowered = databaseUrl.toLowerCase();
+  return lowered.includes('sslmode=require')
+    || lowered.includes('ssl=true')
+    || lowered.includes('ssl=1')
+    || shouldUseSslForHostedPostgres(databaseUrl);
+})();
 
 const commonOptions = {
   dialect: isPostgres ? 'postgres' : dialect, // Force postgres if detected
@@ -20,25 +47,29 @@ const commonOptions = {
     underscored: true,
     freezeTableName: true
   },
-  dialectOptions: isPostgres ? {
-    ssl: {
-      require: true,
-      rejectUnauthorized: false // Required for Render Postgres
-    }
-  } : {
-    charset: 'utf8mb4'
-  }
+  dialectOptions: isPostgres
+    ? (shouldUseSsl
+        ? {
+            ssl: {
+              require: true,
+              rejectUnauthorized: false
+            }
+          }
+        : {})
+    : {
+        charset: 'utf8mb4'
+      }
 };
 
-const sequelize = process.env.DATABASE_URL
-  ? new Sequelize(process.env.DATABASE_URL, commonOptions)
+const sequelize = databaseUrl
+  ? new Sequelize(databaseUrl, commonOptions)
   : new Sequelize(
       process.env.DB_NAME || 'beerclub',
       process.env.DB_USER || 'root',
       process.env.DB_PASSWORD || '',
       {
         host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT || 3306,
+        port: process.env.DB_PORT ? Number(process.env.DB_PORT) : undefined,
         ...commonOptions
       }
     );

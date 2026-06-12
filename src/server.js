@@ -53,7 +53,13 @@ if (!isTestEnv) {
 
 const app = express();
 
-const PORT = process.env.PORT;
+const isDevelopmentEnv = !isTestEnv && (process.env.NODE_ENV || 'development') === 'development';
+const DEFAULT_DEV_PORT = 4000;
+const configuredPort = process.env.PORT ? Number(process.env.PORT) : undefined;
+if (!isTestEnv && !configuredPort && !isDevelopmentEnv) {
+  throw new Error('PORT environment variable is required');
+}
+const initialPort = configuredPort || DEFAULT_DEV_PORT;
 
 // CORREÇÃO OBRIGATÓRIA NO RENDER (resolve o erro do rate-limit + SSE)
 app.set('trust proxy', 1);
@@ -67,12 +73,14 @@ const swaggerOptions = {
       version: '1.0.0',
       description: 'API de CRUD de Usuários para a plataforma Resgate',
     },
-    servers: [
-      {
-        url: process.env.API_PUBLIC_BASE_URL || `http://localhost:${PORT}`,
-        description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server',
-      },
-    ],
+    servers: process.env.API_PUBLIC_BASE_URL
+      ? [
+          {
+            url: process.env.API_PUBLIC_BASE_URL,
+            description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server',
+          },
+        ]
+      : [],
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -158,16 +166,31 @@ app.use(errorHandler);
 
 // Start server
 if (!isTestEnv) {
-  const server = app.listen(PORT, async () => {
-    console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-    try {
-      await testConnection();
-      await sequelize.sync({ alter: true }); // Garante que as novas colunas existam
-      console.log('Database connected and synced!');
-    } catch (error) {
-      console.error('Unable to connect to the database:', error);
-    }
-  });
+  const startServer = (port) => {
+    const server = app.listen(port, async () => {
+      console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${port}`);
+      try {
+        await testConnection();
+        await sequelize.sync({ alter: true }); // Garante que as novas colunas existam
+        console.log('Database connected and synced!');
+      } catch (error) {
+        console.error('Unable to connect to the database:', error);
+      }
+    });
+
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE' && isDevelopmentEnv) {
+        const nextPort = Number(port) + 1;
+        console.warn(`Port ${port} is already in use. Retrying on ${nextPort}.`);
+        startServer(nextPort);
+        return;
+      }
+
+      throw error;
+    });
+  };
+
+  startServer(initialPort);
 }
 
 // Handle unhandled promise rejections

@@ -11,14 +11,14 @@ Olá, IA do Frontend! A API foi construída com sucesso baseada no seu escopo. A
 ## 2. Autenticação (JWT) e Papéis (Roles)
 - As roles disponíveis no banco (PostgreSQL) para o frontend lidar são: `'master'`, `'admin'`, `'manager'`, `'volunteer'`, `'civilian'`, `'shelter'`, `'transport'`, `'boat'`.
 - Por padrão, requisições seguras precisam do cabeçalho: `Authorization: Bearer <token>`
-- A criação de registro no `http://localhost:4000/api/v1/auth/register` criará o usuário com role `civilian` por padrão.
+- A criação de registro no `{{API_PUBLIC_BASE_URL}}/api/v1/auth/register` criará o usuário com role `civilian` por padrão.
 
 ---
 
 ## 3. Endpoints e Contratos (Payload) Base HTML
 
 ### A. Help Requests (Pedidos de Ajuda)
-**Endpoint Base**: `http://localhost:4000/api/v1/requests`
+**Endpoint Base**: `{{API_PUBLIC_BASE_URL}}/api/v1/requests`
 
 - **Criar Pedido de Ajuda** (`POST /`)
   - *Params:* Público 
@@ -45,7 +45,7 @@ Olá, IA do Frontend! A API foi construída com sucesso baseada no seu escopo. A
   - *Efeito:* A API vinculará o usuário logado ao pedido atravéz da prop `accepted_by`.
 
 ### B. Shelters (Abrigos & Lotação Automática)
-**Endpoint Base**: `http://localhost:4000/api/v1/shelters`
+**Endpoint Base**: `{{API_PUBLIC_BASE_URL}}/api/v1/shelters`
 
 - **Cadastrar Abrigo** (`POST /`)
   - *Autenticação:* Necessária (admin/manager)
@@ -59,13 +59,13 @@ Olá, IA do Frontend! A API foi construída com sucesso baseada no seu escopo. A
   - **Super Integração:** O Frontend *NÃO DEVE* se preocupar em calcular a lotação atual (`occupied`). Basta registrar uma Entrada e quando for feito o `PUT /:id_code/entries/MEU_ENTRY_UUID` enviando `{ "status": "present" }`, a própria Base de Dados irá **incrementar ++** as vagas do Abrigo com as Pessoas da Família. Se enviar `"left"`, a API decrenta as vagas. Tudo ocorre no Backend.
 
 ### C. Missing Persons (Desaparecidos)
-**Endpoint Base:** `http://localhost:4000/api/v1/missing`
+**Endpoint Base:** `{{API_PUBLIC_BASE_URL}}/api/v1/missing`
 
 - **Buscar:** `GET /?name=maria&status=missing` (Busca LIKE com paginação embutida).
 - **Resolver:** `PUT /:id_code/status` passando `{ "status": "found" }`.
 
 ### D. Voluntários (Onboarding e Rotinas)
-**Endpoint Base:** `http://localhost:4000/api/v1/volunteers`
+**Endpoint Base:** `{{API_PUBLIC_BASE_URL}}/api/v1/volunteers`
 
 - **Onboarding de Transporte/Habilidades** (`POST /profile`)
   - Payload deve ter os detalhes do carro ou barco:

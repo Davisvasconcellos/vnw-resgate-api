@@ -411,7 +411,7 @@ router.post('/', upload.single('file'), async (req, res) => {
     // const publicUrl = `https://drive.usercontent.google.com/download?id=${result.id}&authuser=0`; // Antigo (Link direto Google)
 
     // Constrói a URL do Proxy da própria API
-    const apiBaseUrl = process.env.API_PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 4000}`;
+    const apiBaseUrl = process.env.API_PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
     const downloadName = result.name || req.file.originalname || 'file';
     const safeDownloadName = encodeURIComponent(downloadName);
     const proxyUrl = `${apiBaseUrl}/api/v1/files/${result.id}?filename=${safeDownloadName}`;

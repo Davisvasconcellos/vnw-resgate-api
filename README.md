@@ -40,7 +40,7 @@ Fluxo automatizado de autenticação social:
 ---
 
 ## 📋 Módulos e Endpoints
-Temos a documentação completa da API no swagger : http://localhost:4000/api-docs
+Temos a documentação completa da API no swagger : /api-docs
 E por medida de segurança, só abre em dev. 
 
 Mas como estamos em dev com a aplicação do **VNW Resgate**, vou deixar aqui os principais endpoints:
