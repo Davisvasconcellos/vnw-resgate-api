@@ -53,7 +53,7 @@ if (!isTestEnv) {
 
 const app = express();
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT;
 
 // CORREÇÃO OBRIGATÓRIA NO RENDER (resolve o erro do rate-limit + SSE)
 app.set('trust proxy', 1);
@@ -63,9 +63,9 @@ const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'VNW Resgate API',
+      title: 'Resgate API',
       version: '1.0.0',
-      description: 'API de CRUD de Usuários para a plataforma VNW Resgate',
+      description: 'API de CRUD de Usuários para a plataforma Resgate',
     },
     servers: [
       {
